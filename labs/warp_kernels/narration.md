@@ -13,8 +13,9 @@ environments, even if they use the same track. Each can take its next step
 independently. Eight thousand is a representative batch, not a physical GPU
 core count.
 
-That is our first division of work. In `step_kernel`, index i means: compute
-one car's next state. What happens inside that item?
+Watch the worlds advance at different rates. Each car uses its own action and
+state. Pick environment five and bring it closer. Its action changes its state
+inside work item five of `step_kernel`. What happens inside that update?
 
 ## VehicleStep
 
@@ -39,9 +40,30 @@ The wheelbase and turning radius make a right triangle. Its geometry gives
 radius equals wheelbase divided by the tangent of the steering angle. Turn
 the front wheel further, and the intersection moves closer. The turn tightens.
 
-The blue velocity arrow stays tangent to the path. It keeps changing direction,
-so there must be acceleration toward the center. That's the yellow arrow.
-Its length is proportional to speed squared divided by the turning radius.
+Call the heading angle psi. As the car travels around a circle, its heading
+turns through the same angle as the radius. An angle change of delta psi
+radians corresponds to an arc length of radius times delta psi.
+
+Divide that distance by the elapsed time. On the left we get speed. On the
+right we get radius times the heading change per second. That last quantity
+is psi dot: the time derivative of the heading. So psi dot equals speed
+divided by radius. A smaller circle at the same speed means faster turning.
+
+Now hold the speed constant and compare the velocity before and after a short
+turn. Their directions differ even though their lengths are equal. Move both
+arrows to a common starting point. The yellow arrow between their tips is
+the change in velocity.
+
+For a small angle, the tip moves approximately speed times the angle change.
+Shrink the turn and the straight difference approaches the little arc.
+Dividing by elapsed time gives the change in velocity per second: acceleration.
+As the interval shrinks, this becomes speed times psi dot. Its direction is
+inward, perpendicular to the instantaneous velocity.
+
+Now substitute the relationship we already found. Psi dot is speed over
+radius, so speed times psi dot is speed times speed over radius. That gives
+speed squared over radius. These are two expressions for the same inward
+acceleration, for the constant-speed left turn shown here.
 
 Now double the speed, keeping the same turn. The required turning acceleration
 becomes four times as large. This is why a bend that is easy at low speed can
@@ -108,6 +130,27 @@ The minimum turning radius grows with speed squared and shrinks as available
 grip increases. Reducing speed reduces the acceleration needed to follow a
 particular bend.
 
+### Four trial states
+
+Before committing to the next state, sample how the motion changes during the
+interval. We enlarge the interval here so the predictions can be distinguished.
+The simulation itself uses much smaller steps.
+
+Start by evaluating the current state. That gives the first derivative, k one.
+Use it to predict a state halfway through the interval, then evaluate the
+motion there. That's k two.
+
+Make another halfway prediction, this time using k two. Its derivative gives
+k three. Finally, use k three to predict the end of the interval, where we
+sample k four. Each evaluation uses the steering angle at its corresponding
+time and applies the same grip limits.
+
+These dots are trial states, not four successive moves of the car. To get the
+actual update, combine the four derivatives. The middle two receive twice the
+weight. Watch the position components become a chain of arrows. Their sum takes
+us from the starting position to the new position. The same weighted sum updates
+heading and speed.
+
 ### Six small updates
 
 Now we can compute the next state. One simulation step lasts a sixtieth of a
@@ -132,6 +175,16 @@ centerline waypoint. Moving forward through those waypoints earns progress.
 The reward also subtracts a near-wall penalty and the squared sideways offset
 from the centerline. Progress and wall penalties include speed-dependent
 weights; the displayed equation shows their structure.
+
+Let's look at that square. Draw the sideways offset as one side of a square.
+The square's area is the penalty. The dot on the graph shows exactly the same
+relationship.
+
+Move twice as far from the centerline. Each side of the square doubles, so
+four copies of the original square now fit inside it. The penalty is four
+times larger. Bring the car back toward the centerline and that cost falls.
+Cross to the other side and the square grows again. The same distance on either
+side has the same cost.
 
 The car has size. Subtract half its diagonal from the wall distance to get
 clearance. If that clearance becomes negative, the kernel marks the episode
@@ -167,21 +220,36 @@ That ray writes one entry in the observation row, after steering and speed.
 On CUDA the distance field is read through a texture; on CPU it is read from
 an array. Both use this same marching procedure.
 
+Straighten each ray into a bar, keeping the bars in beam-angle order. This is
+the scan as a list of distances. The little shape on the right and the fan on
+the left contain the same measurements.
+
+Now turn the car. The sensor moves with it, every ray meets the room in a new
+place, and the bars change with those distances. That changing list is what the
+policy receives in the lidar portion of its observation.
+
 ## TheHandoff
 
-Here are the two divisions of work next to each other. On the left, one item
-per car, with six dependent physics updates. On the right, one item per car
-and beam, each with its own ray-march loop.
+Follow one row. Each yellow point is a physics update, using the state produced
+by the one before it. The rows can make progress independently. Within a row,
+the six updates happen in order.
 
-Physics must finish before lidar: the rays need the updated pose, or the
-respawned pose if the episode just ended.
+After physics has written the new poses, lidar can start. Each car now supplies
+one hundred and eight independent ray items. We're drawing ten columns so the
+indices remain readable.
 
-Put that into one environment call. Copy in the actions, run physics, run
-lidar, then advance the random clock used by future respawns. Return the
-observations, rewards, and done flags.
+Pick row two and beam six. That work item writes its range to observation
+entry eight, because steering and speed occupy the first two entries.
 
-When Warp and Torch use the same CUDA device, those output tensors view the
-same storage. The launches use Torch's current stream, preserving the order.
+Now look at the output arrays. This is a small illustrative
+view of the buffers: observations, rewards, and done flags. Physics writes
+steering and speed, along with reward and done. The red terminal row has already
+respawned, so its steering and speed are zero. Then lidar fills the range entries
+using those updated poses. The random clock advances after the two main kernels.
 
-Each car runs its six physics updates in order. Cars and lidar rays supply
-the independent work.
+When Warp and Torch use the same CUDA device, Torch's output tensors view these
+same buffers. Both arrows point to the same displayed data. The launches use
+Torch's current stream, so physics finishes before lidar reads its results.
+
+The policy receives observations, rewards, and done flags from that shared
+output storage.

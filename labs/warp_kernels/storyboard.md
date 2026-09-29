@@ -22,11 +22,11 @@ restrained color, staged reveals, and transformations that express relationships
 
 | Scene | Visual development | Main takeaway |
 | --- | --- | --- |
-| `Opening` | A car travels around a large track; that world shrinks into twelve separate worlds; a single environment is selected. | One physics work item owns one independent car. |
-| `VehicleStep` | Resolve velocity into components; construct the turn center from wheel normals; follow the tangent and inward acceleration around a turn; double speed; construct the acceleration circle; move a request beyond it; animate the remaining-acceleration chord, braking, reduced friction, and turn saturation; compare requested and capped paths; integrate six RK4 substeps. | The combined acceleration has a limit. The kernel clips the request to what the tires can supply. |
-| `RewardAndRespawn` | A wall-distance circle is replaced by a waypoint projection; progress and lateral offset become reward terms; the car footprint crosses the wall and respawns. | Wall distance and waypoint lookup answer different questions. |
-| `WarpLidar` | A ray advances exactly one clearance radius at a time; its segments become a range with a brace parallel to the ray; a fan expands the work into `(car, beam)` indices and observation slots. | Marching is sequential within a ray, independent across rays. |
-| `TheHandoff` | Rows of six dependent steps become a grid of beam items; launch order resolves into shared output storage. | Physics precedes sensing; Warp and Torch can share the outputs. |
+| `Opening` | A car travels around a large track; that world shrinks into twelve separate worlds; the worlds advance at different rates; one environment enlarges beside its state and action. | One physics work item owns one independent car. |
+| `VehicleStep` | Resolve velocity into components; construct the turn center from wheel normals; derive heading rate from arc length; compare translated velocity arrows and take the small-interval limit; substitute heading rate to obtain inward acceleration; double speed; construct the acceleration circle; move a request beyond it; animate the remaining-acceleration chord, braking, reduced friction, and turn saturation; compare requested and capped paths; construct four RK4 trial states and add their weighted displacement vectors; integrate six real substeps. | The combined acceleration has a limit. The kernel clips the request to what the tires can supply. |
+| `RewardAndRespawn` | A wall-distance circle is replaced by a waypoint projection; progress and lateral offset become reward terms; a growing square and live parabola explain the offset penalty; the car footprint crosses the wall and respawns. | Wall distance and waypoint lookup answer different questions. |
+| `WarpLidar` | A ray advances exactly one clearance radius at a time; its segments become a range with a brace parallel to the ray; a fan expands the work into `(car, beam)` indices and observation slots; the rays straighten into a range profile that changes as the car turns. | Marching is sequential within a ray, independent across rays. |
+| `TheHandoff` | Pulses traverse six physics updates, then spread into a ray grid; row and column guides select one output slot; an abbreviated output table fills first from physics and then lidar; Warp and Torch point to the same data. | Physics precedes sensing; the output tensors can view Warp's existing buffers. |
 
 ## Deliberate abstractions
 
@@ -41,8 +41,22 @@ restrained color, staged reveals, and transformations that express relationships
   Every derivative evaluation caps yaw and longitudinal acceleration exactly
   as `deriv()` does, including the 0.5 m/s denominator floor. These initial
   conditions activate the grip limit. Screen displacement is magnified 145 times.
+- The four-stage RK4 construction uses an enlarged 0.45 s interval, initial
+  speed 2 m/s, steering 0.25 rad, steering rate 0.15 rad/s, and requested
+  acceleration 1 m/s². It uses the same derivative and RK4 helper as the
+  actual six-substep example. The diagram draws position components of the
+  derivative vectors; the full state also contains heading and speed.
+  Trial positions are not successive committed car positions. The arrows in
+  the final sum have lengths proportional to `h * weight * derivative / 6`.
 - The steering construction uses enlarged wheel angles so the triangle is
   readable; these are not the simulator's 0.4189 rad steering limit.
+- The heading-rate derivation uses arc length `Δs = R Δψ`, with angles in
+  radians, then divides by `Δt` to obtain `v = R ψ̇`. The velocity-change
+  construction translates equal-length tangent vectors to a shared origin.
+  Its chord is approximately `v Δψ` for a small angle; shrinking the interval
+  gives `a_lateral = v ψ̇`, then substitution gives `v²/R`. The demonstration
+  is a constant-speed left turn. For a general turn the inward acceleration
+  magnitude is `v |ψ̇|`; signed components depend on the turn direction.
 - The turning diagram uses schematic lengths and playback timing. Its inward
   acceleration arrow grows fourfold when the velocity arrow doubles.
 - The grip plot uses acceleration units normalized by the initial mu g. It
@@ -61,6 +75,10 @@ restrained color, staged reveals, and transformations that express relationships
 - Reward terms show structure, not all coefficients: signed wrapped waypoint
   progress and wall proximity also have speed factors. The collision example
   sets reward to −25. Timeout alone does not imply that penalty.
+- The centerline demonstration holds the other reward terms aside. It plots
+  signed lateral offset against its square; the implementation computes the
+  absolute offset before squaring, with the same result. The displayed
+  coefficient is the source's `CENTER_COEF = 1.0`.
 - Clearance uses a bounding circle with radius half the car diagonal. The
   footprint diagram is schematic. A crash or 10,000 steps immediately resets;
   friction and wheelbase scales vary by ±15%.
@@ -71,6 +89,19 @@ restrained color, staged reveals, and transformations that express relationships
   The smooth illustration stops once the residual is under 0.015 drawing units.
 - Nineteen fan rays and a small output strip stand for 108 beams over 270° and
   an observation row of 110 values. The sensor is ahead of the car center.
+- The range profile uses the same nineteen illustrative rays as the fan.
+  Their lengths share one fixed display scale. During rotation, ray origins
+  follow the sensor mount and every wall intersection is recomputed each frame.
+  Beam angles are relative to the car, not fixed world headings.
+- The ending shows four environments and ten beam columns as a readable sample.
+  The dotted separator marks launch order, not a barrier inside a kernel.
+  Selecting `(i=2, j=6)` gives `obs[2, 8]` because the first two entries hold
+  steering and speed.
+- The output table contains illustrative values, not a captured simulator batch.
+  Its terminal row has reward −25, done = 1, and zero steering/speed to show
+  immediate respawn. Range values appear in the later lidar pass. The green
+  frame groups three output arrays; it does not claim they share one contiguous
+  allocation. Warp and Torch view the same respective output buffers.
 - CUDA uses a nearest-sampled texture; CPU uses direct EDT array reads.
   The final shared-storage claim applies when Warp and Torch share a CUDA device.
   A different Torch device uses explicit output copies.
@@ -101,5 +132,6 @@ requested/applied vector separation, horizontal clipping at fixed lateral
 acceleration, the shrinking chord, negative longitudinal demand when braking,
 the friction sweep, the wider capped turn, equation margins, the six highlighted
 intervals, the ray-aligned range brace, wall tangencies,
-waypoint projections, reset behavior, and the final observation strip. Rendered
+waypoint projections, the fourfold square area, signed-offset symmetry, reset
+behavior, ray-to-bar correspondence, and the rotating observation profile. Rendered
 chapters and the concatenated tour are silent; narration is maintained separately.

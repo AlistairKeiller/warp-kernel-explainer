@@ -52,6 +52,29 @@ def curve(points, color=BLUE, width=3):
     return VMobject().set_points_smoothly(points).set_stroke(color, width)
 
 
+def physics_derivative(state, delta, accel=1., wheelbase=.3302, mu=1.0489):
+    """NumPy version of sim.py's bicycle derivative, including grip caps."""
+    limit = mu * 9.81
+    yaw_cap = limit / max(abs(state[3]), .5)
+    yaw = np.clip(state[3]*np.tan(delta)/wheelbase, -yaw_cap, yaw_cap)
+    remaining = np.sqrt(max(limit*limit-(state[3]*yaw)**2, 0.))
+    return np.array([state[3]*np.cos(state[2]), state[3]*np.sin(state[2]),
+                     yaw, np.clip(accel, -remaining, remaining)])
+
+
+def rk4_step(state, delta, h, steer_rate, accel=1.):
+    """Return trial states, derivative samples, and the weighted next state."""
+    k1 = physics_derivative(state, delta, accel)
+    s2 = state+h*k1/2
+    k2 = physics_derivative(s2, delta+steer_rate*h/2, accel)
+    s3 = state+h*k2/2
+    k3 = physics_derivative(s3, delta+steer_rate*h/2, accel)
+    s4 = state+h*k3
+    k4 = physics_derivative(s4, delta+steer_rate*h, accel)
+    result = state+h*(k1+2*k2+2*k3+k4)/6
+    return [state.copy(), s2, s3, s4], [k1, k2, k3, k4], result
+
+
 class FilmScene(Scene):
     def setup(self):
         super().setup()
@@ -102,21 +125,37 @@ class Opening(FilmScene):
         self.play(Write(indices))
         many = self.caption("8,000 environments, each with its own car", BLUE)
         self.wait(3)
-        # Identical motion in separate coordinate systems makes independence visible.
-        def advance(mob, alpha):
-            p, heading = pose(PI/2 + .65*alpha)
-            mob[1].become(car(mob[0].get_center() + .85*.27*p,
-                              heading, scale=.85*.27))
-        self.play(*[UpdateFromAlphaFunc(w, advance) for w in worlds], run_time=1.5)
+        # Different local motion makes the independent environments visible.
+        def advance(index):
+            def update(mob, alpha):
+                p, heading = pose(PI/2 + .65*(1+.08*index)*alpha)
+                mob[1].become(car(mob[0].get_center() + .85*.27*p,
+                                  heading, scale=.85*.27))
+            return update
+        self.play(*[UpdateFromAlphaFunc(w, advance(i)) for i, w in enumerate(worlds)], run_time=3)
         chosen = worlds[5]
         self.play(*[w.animate.fade(.84) for i, w in enumerate(worlds) if i != 5],
                   *[t.animate.set_opacity(.16) for i, t in enumerate(indices) if i != 5])
         self.wait(1)
-        self.play(FadeOut(worlds), FadeOut(indices), FadeOut(many), FadeOut(question))
-        equation = math_label(r"\texttt{step\_kernel}:\quad i\longmapsto\text{one car's next state}", 42)
-        self.play(Write(equation), run_time=2)
-        self.caption("A logical work item, scheduled by the GPU.")
-        self.wait(3)
+        self.play(*[FadeOut(w) for i, w in enumerate(worlds) if i != 5],
+                  FadeOut(indices), FadeOut(many), run_time=1)
+        self.play(chosen.animate.scale(2.8).move_to([-2.5, 0, 0]), run_time=2)
+        item = math_label(r"\texttt{step\_kernel}(i=5)", 33, YELLOW).move_to([3.55, 1.25, 0])
+        state = math_label(r"s_5\longmapsto s'_5", 43).move_to([3.55, 0, 0])
+        action = math_label(r"a_5", 36, BLUE).move_to([3.55, -1.5, 0])
+        action_arrow = Arrow([3.55, -1.1, 0], [3.55, -.4, 0], buff=0, fill_color=BLUE)
+        self.play(Write(item), run_time=1.5)
+        self.play(Write(state), Write(action), GrowArrow(action_arrow), run_time=2)
+        self.caption("Its own action updates its own state.")
+        previous_pose = chosen[1].copy().fade(.75)
+        self.add(previous_pose)
+        def update_selected(mob, alpha):
+            p, angle = pose(PI/2 + .65*1.4 + .45*alpha)
+            factor = .85*.27*2.8
+            mob[1].become(car(mob[0].get_center()+factor*p, angle, scale=factor))
+        self.play(FlashAround(action, color=BLUE), run_time=.8)
+        self.play(UpdateFromAlphaFunc(chosen, update_selected), run_time=2)
+        self.wait(2)
 
 
 class VehicleStep(FilmScene):
@@ -132,6 +171,8 @@ class VehicleStep(FilmScene):
         self.acceleration_circle()
         self.clear()
         self.turning_limit()
+        self.clear()
+        self.rk4_estimates()
         self.clear()
         self.integrate()
 
@@ -262,7 +303,157 @@ class VehicleStep(FilmScene):
         self.remove(driver)
 
     def turning_acceleration(self):
-        self.heading("Steering bends the path.")
+        self.heading_rate()
+        self.clear()
+        self.velocity_change()
+        self.clear()
+        self.turning_summary()
+
+    def heading_rate(self):
+        self.heading("How quickly does the heading turn?")
+        center = np.array([-3.4, .35, 0])
+        radius = 1.9
+        angle = ValueTracker(.02)
+        path = Circle(radius=radius).move_to(center).set_stroke(WALL, 2)
+        start = center + DOWN*radius
+        original_radius = Line(center, start).set_stroke(WALL, 2)
+        radial = Line(center, start).set_stroke(BLUE, 2)
+        traveled = Arc(start_angle=-PI/2, angle=.02, radius=radius).shift(center).set_stroke(BLUE, 5)
+        angle_arc = Arc(start_angle=-PI/2, angle=.02, radius=.55).shift(center).set_stroke(YELLOW, 3)
+        racer = car(start, scale=.85)
+        velocity = Arrow(start, start+RIGHT, buff=0, fill_color=BLUE)
+        ghost = racer.copy().fade(.7)
+        delta_label = math_label(r"\Delta\psi", 29, YELLOW)
+        distance_label = math_label(r"\Delta s", 29, BLUE)
+        radius_label = math_label("R", 29, MUTED).move_to(center+[-.3, -.95, 0])
+        self.play(ShowCreation(path), FadeIn(racer), ShowCreation(original_radius), Write(radius_label))
+        self.add(ghost)
+        definition = math_label(r"\psi=\text{heading angle}", 35).move_to([3.2, 2.1, 0])
+        self.play(Write(definition))
+
+        def update(_):
+            a = angle.get_value()
+            p = center+radius*np.array([np.sin(a), -np.cos(a), 0])
+            tangent = np.array([np.cos(a), np.sin(a), 0])
+            racer.become(car(p, a, scale=.85))
+            velocity.put_start_and_end_on(p, p+tangent)
+            radial.put_start_and_end_on(center, p)
+            traveled.become(Arc(start_angle=-PI/2, angle=a, radius=radius).shift(center).set_stroke(BLUE, 5))
+            angle_arc.become(Arc(start_angle=-PI/2, angle=a, radius=.55).shift(center).set_stroke(YELLOW, 3))
+            delta_label.move_to(center+.95*np.array([np.sin(a/2), -np.cos(a/2), 0]))
+            distance_label.move_to(center+(radius+.35)*np.array([np.sin(a/2), -np.cos(a/2), 0]))
+
+        driver = VMobject().add_updater(update)
+        self.add(driver, radial, traveled, angle_arc, velocity)
+        self.play(angle.animate.set_value(.9), run_time=3)
+        self.play(Write(delta_label), Write(distance_label))
+        caption = self.caption("The heading and radius turn through the same angle.")
+        distance_eq = math_label(r"\Delta s=R\,\Delta\psi", 40).move_to([3.2, .85, 0])
+        self.play(Write(distance_eq), run_time=2)
+        self.wait(2)
+        time_eq = math_label(r"{\Delta s\over\Delta t}=R\,{\Delta\psi\over\Delta t}", 40).move_to(distance_eq)
+        self.play(TransformMatchingTex(distance_eq, time_eq), run_time=1.5)
+        distance_eq = time_eq
+        self.play(FadeOut(caption))
+        caption = self.caption("Divide distance and heading change by the same elapsed time.")
+        self.wait(2)
+        rate_eq = math_label(r"v=R\dot\psi", 43, BLUE).move_to(distance_eq)
+        self.play(TransformMatchingTex(distance_eq, rate_eq), run_time=1.5)
+        distance_eq = rate_eq
+        rate_definition = math_label(r"\dot\psi={d\psi\over dt}", 38, YELLOW).move_to([3.2, -.65, 0])
+        meaning = words("heading change per second", 25, YELLOW).move_to([3.2, -1.5, 0])
+        self.play(Write(rate_definition), Write(meaning))
+        self.wait(3)
+        solved = math_label(r"\dot\psi={v\over R}", 44, YELLOW).move_to(distance_eq)
+        self.play(TransformMatchingTex(distance_eq, solved), run_time=1.5)
+        self.play(angle.animate.set_value(1.45), run_time=2.5)
+        self.wait(2)
+        driver.clear_updaters()
+        self.remove(driver)
+
+    def velocity_change(self):
+        self.heading("Turning changes the velocity, even at constant speed.")
+        center = np.array([-3.6, .3, 0])
+        radius = 1.8
+        angle = ValueTracker(.8)
+        start = center + DOWN*radius
+        path = Circle(radius=radius).move_to(center).set_stroke(WALL, 2)
+        initial = car(start, scale=.75).fade(.65)
+        racer = car(start, scale=.75)
+        old_velocity = Arrow(start, start+RIGHT*1.15, buff=0, fill_color=BLUE).fade(.45)
+        new_velocity = Arrow(start, start+RIGHT*1.15, buff=0, fill_color=BLUE)
+        self.play(ShowCreation(path), FadeIn(initial), FadeIn(racer), GrowArrow(old_velocity))
+        final_position = center+radius*np.array([np.sin(.8), -np.cos(.8), 0])
+        def move_around_circle(mob, alpha):
+            a = .8*alpha
+            point = center+radius*np.array([np.sin(a), -np.cos(a), 0])
+            mob.become(car(point, a, scale=.75))
+        self.play(UpdateFromAlphaFunc(racer, move_around_circle), run_time=2)
+        new_velocity.put_start_and_end_on(final_position, final_position+1.15*np.array([np.cos(.8),np.sin(.8),0]))
+        self.play(GrowArrow(new_velocity))
+        origin = np.array([1.55, -1.1, 0])
+        length = 2.8
+        first = Arrow(origin, origin+RIGHT*length, buff=0, fill_color=BLUE).fade(.4)
+        second = Arrow(origin, origin+length*np.array([np.cos(.8),np.sin(.8),0]), buff=0, fill_color=BLUE)
+        self.play(TransformFromCopy(old_velocity, first), TransformFromCopy(new_velocity, second), run_time=2)
+        caption = self.caption("Put the two velocity arrows at the same starting point.")
+        difference = Arrow(first.get_end(), second.get_end(), buff=0, fill_color=YELLOW)
+        arc = Arc(start_angle=0, angle=.8, radius=length).shift(origin).set_stroke(YELLOW, 2, opacity=.45)
+        small_arc = Arc(start_angle=0, angle=.8, radius=.65).shift(origin).set_stroke(YELLOW, 2)
+        delta_label = math_label(r"\Delta\psi", 27, YELLOW).move_to(origin+[.85,.35,0])
+        change_label = math_label(r"\Delta\mathbf v", 29, YELLOW).next_to(difference, RIGHT, buff=.15)
+        self.play(GrowArrow(difference), ShowCreation(arc), ShowCreation(small_arc), Write(delta_label), Write(change_label))
+        self.wait(2)
+        formula = math_label(r"|\Delta\mathbf v|\approx v\,\Delta\psi", 36, YELLOW).move_to([3.1, 2.2, 0])
+        self.play(Write(formula))
+        self.play(FadeOut(caption))
+        caption = self.caption("For a small turn, the tip moves about v × Δψ.")
+
+        def update(_):
+            a = angle.get_value()
+            direction = np.array([np.cos(a), np.sin(a), 0])
+            p = center+radius*np.array([np.sin(a), -np.cos(a), 0])
+            racer.become(car(p, a, scale=.75))
+            new_velocity.put_start_and_end_on(p, p+1.15*direction)
+            second.put_start_and_end_on(origin, origin+length*direction)
+            difference.put_start_and_end_on(origin+RIGHT*length, origin+length*direction)
+            arc.become(Arc(start_angle=0, angle=a, radius=length).shift(origin).set_stroke(YELLOW, 2, opacity=.45))
+            small_arc.become(Arc(start_angle=0, angle=a, radius=.65).shift(origin).set_stroke(YELLOW, 2))
+            delta_label.move_to(origin+.98*np.array([np.cos(a/2),np.sin(a/2),0])+UP*.25)
+            change_label.next_to(difference, RIGHT, buff=.2)
+
+        driver = VMobject().add_updater(update)
+        self.add(driver)
+        self.play(angle.animate.set_value(.18), run_time=4)
+        self.wait(2)
+        divided = math_label(r"{|\Delta\mathbf v|\over\Delta t}\approx v\,{\Delta\psi\over\Delta t}", 35, YELLOW).move_to(formula)
+        self.play(TransformMatchingTex(formula, divided), FadeOut(caption), run_time=2)
+        formula = divided
+        caption = self.caption("Acceleration is the change in velocity per second.")
+        self.wait(2)
+        limit = math_label(r"a_{\rm lateral}=v\dot\psi", 40, YELLOW).move_to(formula)
+        self.play(FadeOut(caption))
+        self.caption("Shrink the time interval to get the instantaneous acceleration.")
+        self.play(TransformMatchingTex(formula, limit), angle.animate.set_value(.08), run_time=2)
+        self.wait(2)
+        driver.clear_updaters()
+        self.remove(driver)
+        self.clear()
+        self.heading("The two expressions describe the same acceleration.")
+        yaw = math_label(r"\dot\psi={v\over R}", 47, BLUE).move_to([0,1.4,0])
+        acceleration = math_label(r"a_{\rm lateral}=v\dot\psi", 47, YELLOW).move_to([0,-.1,0])
+        self.play(Write(yaw), Write(acceleration), run_time=2)
+        substituted = math_label(r"a_{\rm lateral}=v\left({v\over R}\right)", 47, YELLOW).move_to(acceleration)
+        self.play(TransformMatchingTex(acceleration, substituted), run_time=2)
+        self.wait(2)
+        acceleration = substituted
+        result = math_label(r"a_{\rm lateral}={v^2\over R}", 50, YELLOW).move_to(acceleration)
+        self.play(TransformMatchingTex(acceleration, result), run_time=1.5)
+        self.caption("Speed × heading change per second = inward acceleration.")
+        self.wait(3)
+
+    def turning_summary(self):
+        self.heading("Now double the speed on the same circle.")
         center = np.array([-3.1, .3, 0])
         radius = 1.9
         theta = ValueTracker(-PI/2)
@@ -482,6 +673,68 @@ class VehicleStep(FilmScene):
         driver.clear_updaters()
         self.remove(driver)
 
+    def rk4_estimates(self):
+        self.heading("Sample the motion before committing to the step.")
+        # Use an explicitly enlarged interval so the trial states are distinguishable.
+        # The derivative and stage construction are the same as the six real substeps.
+        state = np.array([0., 0., 0., 2.])
+        h, delta, steer_rate = .45, .25, .15
+        trials, slopes, result = rk4_step(state, delta, h, steer_rate)
+        origin = np.array([-5.1, -1.6, 0])
+        scale = 5.
+        project = lambda s: origin + scale*np.array([s[0], s[1], 0])
+        colors = [BLUE, YELLOW, "#C39BFF", GREEN]
+        start = Dot(origin, radius=.075, fill_color=WHITE)
+        initial = car(origin, scale=.85)
+        self.play(FadeIn(initial), FadeIn(start))
+        caption = self.caption("Enlarged interval: 0.45 s, so the trial states can be seen.")
+        equations = VGroup(*[
+            math_label(text, 31, color) for text, color in zip([
+                r"k_1=f(s_n,\delta)",
+                r"k_2=f(s_n+\tfrac h2 k_1,\delta_{\rm mid})",
+                r"k_3=f(s_n+\tfrac h2 k_2,\delta_{\rm mid})",
+                r"k_4=f(s_n+h k_3,\delta_{\rm end})",
+            ], colors)
+        ]).arrange(DOWN, aligned_edge=LEFT, buff=.5).move_to([3.4, .65, 0])
+        arrows, dots, labels, predictions = VGroup(), VGroup(), VGroup(), VGroup()
+        for i, (trial, slope, color) in enumerate(zip(trials, slopes, colors)):
+            point = project(trial)
+            dot = Dot(point, radius=.065, fill_color=color)
+            direction = .62*np.array([slope[0], slope[1], 0])
+            arrow = Arrow(point, point+direction, buff=0, fill_color=color)
+            label = math_label(f"k_{i+1}", 27, color).next_to(arrow, UP, buff=.12)
+            if i:
+                prediction = DashedLine(origin, point).set_stroke(color, 1.5, opacity=.45)
+                predictions.add(prediction)
+                self.play(ShowCreation(prediction), TransformFromCopy(dots[-1], dot), run_time=1.4)
+            else:
+                self.play(FadeIn(dot))
+            self.play(GrowArrow(arrow), Write(label), Write(equations[i]), run_time=1.6)
+            arrows.add(arrow)
+            dots.add(dot)
+            labels.add(label)
+            self.wait(1.5)
+        self.wait(2)
+        self.play(FadeOut(predictions), FadeOut(dots), FadeOut(labels), FadeOut(equations), FadeOut(caption))
+        average = math_label(r"\Delta s={h\over6}(k_1+2k_2+2k_3+k_4)", 35).move_to([2.7, 2.55, 0])
+        self.play(Write(average), run_time=2)
+        self.caption("Combine the four estimates with weights 1, 2, 2, 1.")
+        # Draw the position components of the weighted state increments head to tail.
+        weighted = VGroup()
+        tip = origin.copy()
+        for i, (slope, weight, color) in enumerate(zip(slopes, [1, 2, 2, 1], colors)):
+            increment = scale*h*weight/6*np.array([slope[0], slope[1], 0])
+            arrow = Arrow(tip, tip+increment, buff=0, fill_color=color)
+            weighted.add(arrow)
+            self.play(TransformFromCopy(arrows[i], arrow), run_time=1.3)
+            tip += increment
+        self.play(FadeOut(arrows))
+        endpoint = Dot(project(result), radius=.08, fill_color=WHITE)
+        self.play(FadeIn(endpoint), Transform(initial, car(project(result), result[2], scale=.85)), run_time=2)
+        updated = math_label(r"s_{n+1}=s_n+\Delta s", 35).move_to([2.7, .55, 0])
+        self.play(Write(updated))
+        self.wait(3)
+
     def integrate(self):
         self.heading("Now advance the state by 1/60 second.")
         interval = Line([-5.5, 1.65, 0], [5.5, 1.65, 0]).set_stroke(WHITE, 2)
@@ -496,19 +749,8 @@ class VehicleStep(FilmScene):
         state = np.array([0., 0., .15, 4.])
         h, delta, steer_rate, accel, wheelbase = 1/360, .24, .4, 1., .3302
         states = [state.copy()]
-        def f(s, d):
-            limit = 1.0489 * 9.81
-            yaw_cap = limit / max(abs(s[3]), .5)
-            yaw = np.clip(s[3]*np.tan(d)/wheelbase, -yaw_cap, yaw_cap)
-            remaining = np.sqrt(max(limit*limit-(s[3]*yaw)**2, 0.))
-            applied_accel = np.clip(accel, -remaining, remaining)
-            return np.array([s[3]*np.cos(s[2]), s[3]*np.sin(s[2]), yaw, applied_accel])
         for _ in range(6):
-            k1 = f(state, delta)
-            k2 = f(state+h*k1/2, delta+steer_rate*h/2)
-            k3 = f(state+h*k2/2, delta+steer_rate*h/2)
-            k4 = f(state+h*k3, delta+steer_rate*h)
-            state = state+h*(k1+2*k2+2*k3+k4)/6
+            _, _, state = rk4_step(state, delta, h, steer_rate, accel)
             delta += steer_rate*h
             states.append(state.copy())
         points = [np.array([-5+145*s[0], -.7+145*s[1], 0]) for s in states]
@@ -561,6 +803,15 @@ class RewardAndRespawn(FilmScene):
         self.play(Indicate(nearest, color=RED), run_time=1)
         self.wait(1)
         self.play(FadeOut(nearest), FadeOut(reward))
+        saved = [m for m in self.mobjects if m is not self.camera.frame]
+        for mob in saved:
+            mob.save_state()
+        self.clear()
+        self.offset_penalty()
+        self.clear()
+        for mob in saved:
+            mob.restore()
+        self.play(*[FadeIn(mob) for mob in saved])
         footprint = Circle(radius=float(np.hypot(.65, .38)/2)).move_to(racer).set_stroke(RED, 2)
         clearance = math_label(r"\text{clearance}=d_{\rm wall}-{1\over2}\text{car diagonal}", 34).move_to([0,2.55,0])
         self.play(Write(clearance), ShowCreation(footprint))
@@ -575,6 +826,72 @@ class RewardAndRespawn(FilmScene):
         detail = words("Respawn at rest, with new friction and wheelbase values.",25).move_to([0,-2.5,0])
         self.play(FadeIn(detail))
         self.wait(3)
+
+
+    def offset_penalty(self):
+        self.heading("Why square the distance from the centerline?")
+        x, top = -4., 2.
+        walls = VGroup(Line([-6, top, 0], [-1, top, 0]),
+                       Line([-6, -top, 0], [-1, -top, 0])).set_stroke(WALL, 3)
+        centerline = DashedLine([-6, 0, 0], [-1, 0, 0]).set_stroke(BLUE, 2)
+        offset = ValueTracker(.6)
+        racer = car([x, .6, 0])
+        area = Square(side_length=.6).move_to([x+.3, .3, 0]).set_stroke(BLUE, 2).set_fill(BLUE, .25)
+        distance = Line([x, 0, 0], [x, .6, 0]).set_stroke(YELLOW, 4)
+        self.play(ShowCreation(walls), ShowCreation(centerline), FadeIn(racer))
+        d_label = math_label("d", 31, YELLOW).move_to([x-.4, .3, 0])
+        self.play(ShowCreation(distance), Write(d_label))
+        self.play(GrowFromPoint(area, [x, 0, 0]), run_time=1.5)
+        graph_origin = np.array([3.25, -1.25, 0])
+        def gp(d):
+            return graph_origin + np.array([1.55*d, 1.15*d*d, 0])
+        axes = VGroup(Line(graph_origin+LEFT*2.5, graph_origin+RIGHT*2.5),
+                      Line(graph_origin, graph_origin+UP*2.65)).set_stroke(WALL, 1.5)
+        ticks = VGroup(*[words(str(d), 20, MUTED).move_to(graph_origin+[1.55*d, -.3, 0]) for d in [-1, 0, 1]])
+        graph = curve([gp(d) for d in np.linspace(-1.45, 1.45, 120)], BLUE, 3)
+        marker = Dot(gp(.6), radius=.07, fill_color=YELLOW)
+        guide = DashedLine(graph_origin+RIGHT*(1.55*.6), gp(.6)).set_stroke(YELLOW, 1.5)
+        formula = math_label(r"\text{penalty}=d^2", 38, BLUE).move_to([3.25, 2.25, 0])
+        axis_label = words("offset", 22, MUTED).next_to(axes[0], RIGHT, buff=.15)
+        self.play(ShowCreation(axes), Write(ticks), Write(axis_label))
+        self.play(TransformFromCopy(area, formula), ShowCreation(graph), run_time=2)
+        self.play(FadeIn(marker), ShowCreation(guide))
+        label = words("offset", 24, YELLOW).move_to([2.25, -2.25, 0])
+        number = DecimalNumber(.6, num_decimal_places=2, font_size=29).set_color(YELLOW).move_to([4.05, -2.25, 0])
+        penalty_label = words("penalty", 24, BLUE).move_to([2.25, -2.8, 0])
+        penalty_number = DecimalNumber(.36, num_decimal_places=2, font_size=29).set_color(BLUE).move_to([4.05, -2.8, 0])
+        self.play(FadeIn(label), FadeIn(number), FadeIn(penalty_label), FadeIn(penalty_number))
+        caption = self.caption("The square's area is the centerline penalty.")
+
+        def update(_):
+            d = offset.get_value()
+            size = max(abs(d), 1e-5)
+            racer.move_to([x, d, 0])
+            area.become(Square(side_length=size).move_to([x+size/2, d/2, 0])
+                        .set_stroke(BLUE, 2).set_fill(BLUE, .25))
+            distance.put_start_and_end_on(np.array([x, 0, 0]), np.array([x, d+1e-6, 0]))
+            d_label.move_to([x-.4, d/2, 0])
+            marker.move_to(gp(d))
+            guide.put_start_and_end_on(graph_origin+RIGHT*(1.55*d), gp(d)+UP*1e-6)
+            number.set_value(d)
+            penalty_number.set_value(d*d)
+
+        driver = VMobject().add_updater(update)
+        self.add(driver)
+        self.wait(2)
+        self.play(offset.animate.set_value(1.2), run_time=4)
+        tiles = VGroup(Line([x+.6, 0, 0], [x+.6, 1.2, 0]),
+                       Line([x, .6, 0], [x+1.2, .6, 0])).set_stroke(WHITE, 2)
+        self.play(ShowCreation(tiles), FadeOut(caption))
+        self.caption("Twice the offset gives four times the penalty.")
+        self.wait(3)
+        self.play(FadeOut(tiles))
+        self.play(offset.animate.set_value(0), run_time=3)
+        self.wait(1)
+        self.play(offset.animate.set_value(-1.2), run_time=4)
+        self.wait(3)
+        driver.clear_updaters()
+        self.remove(driver)
 
 
 class WarpLidar(FilmScene):
@@ -658,54 +975,172 @@ class WarpLidar(FilmScene):
         self.play(TransformFromCopy(selected,labels[5]),run_time=1.2)
         write=math_label(r"\texttt{obs}[i,\,2+j]=r_j",32,YELLOW).move_to([3,-1.25,0])
         self.play(Write(write))
-        self.caption("Each ray has its own loop. Different rays are independent.")
+        fan_caption = self.caption("Each ray has its own loop. Different rays are independent.")
         self.wait(3)
+        self.play(FadeOut(index), FadeOut(cells), FadeOut(labels), FadeOut(write), FadeOut(fan_caption))
+        beams.set_stroke(BLUE, 1.6)
+        plot_base = -1.45
+        bar_x = np.linspace(.85, 5.55, len(beams))
+        def profile(rays):
+            return VGroup(*[
+                Line([x, plot_base, 0], [x, plot_base+.85*ray.get_length(), 0]).set_stroke(BLUE, 5)
+                for x, ray in zip(bar_x, rays)
+            ])
+        bars = profile(beams)
+        baseline = Line([.65, plot_base, 0], [5.75, plot_base, 0]).set_stroke(WALL, 2)
+        angle_labels = VGroup(*[
+            math_label(text, 23, MUTED).move_to([x, plot_base-.35, 0])
+            for x, text in [(bar_x[0],r"-135^\circ"),(bar_x[9],r"0^\circ"),(bar_x[-1],r"135^\circ")]
+        ])
+        range_label = words("distance along each ray", 26, BLUE).move_to([3.2, 2.3, 0])
+        self.play(ShowCreation(baseline), Write(angle_labels), Write(range_label))
+        self.play(LaggedStart(*[TransformFromCopy(ray, bar) for ray, bar in zip(beams, bars)],
+                              lag_ratio=.08), run_time=4)
+        self.caption("Each bar is one range measurement, ordered by beam angle.")
+        self.wait(2)
+        heading = ValueTracker(0.)
+        def scan(angle):
+            sensor_position = origin+.27*np.array([np.cos(angle), np.sin(angle), 0])
+            rays = VGroup()
+            for offset in np.linspace(-3*PI/4, 3*PI/4, 19):
+                direction = np.array([np.cos(angle+offset), np.sin(angle+offset), 0])
+                candidates = []
+                for axis, low, high in [(0,-5.9,-.7),(1,-2,2)]:
+                    if abs(direction[axis]) > 1e-8:
+                        wall = high if direction[axis] > 0 else low
+                        candidates.append((wall-sensor_position[axis])/direction[axis])
+                rays.add(Line(sensor_position, sensor_position+min(candidates)*direction).set_stroke(BLUE, 1.6))
+            return rays
+        def update(_):
+            rays = scan(heading.get_value())
+            beams.become(rays)
+            bars.become(profile(rays))
+            racer.become(car(origin, heading.get_value()))
+        driver = VMobject().add_updater(update)
+        self.add(driver)
+        self.play(heading.animate.set_value(.65), run_time=4)
+        self.wait(1)
+        self.play(heading.animate.set_value(-.35), run_time=5)
+        self.wait(2)
+        driver.clear_updaters()
+        self.remove(driver)
 
 
 class TheHandoff(FilmScene):
     def construct(self):
-        self.heading("Two ways to divide the work.")
-        rows=VGroup()
-        cars=VGroup()
-        for i in range(4):
-            y=1.55-i*.9
-            cars.add(car([-5.2,y,0],scale=.65,color=YELLOW))
-            dots=VGroup(*[Dot([-3.9+j*.52,y,0],radius=.06,fill_color=YELLOW) for j in range(6)])
-            links=VGroup(*[Line(dots[j].get_center(),dots[j+1].get_center()).set_stroke(YELLOW,1.5) for j in range(5)])
-            rows.add(VGroup(links,dots))
-        car_title=words("one item per car",29,YELLOW).move_to([-3.6,2.55,0])
-        beam_title=words("one item per (car, beam)",29,BLUE).move_to([3.1,2.55,0])
-        self.play(FadeIn(cars),Write(car_title))
+        self.work_grid()
+        self.clear()
+        self.shared_outputs()
+
+    def work_grid(self):
+        self.heading("Follow the work from cars to rays.")
+        ys = [1.55, .6, -.35, -1.3]
+        cars = VGroup(*[car([-5.7, y, 0], scale=.7) for y in ys])
+        rows = VGroup(*[
+            VGroup(*[Dot([-4.6+.5*j, y, 0], radius=.06, fill_color=WALL) for j in range(6)])
+            for y in ys
+        ])
+        links = VGroup(*[
+            Line(row[0].get_center(), row[-1].get_center()).set_stroke(WALL, 1.5)
+            for row in rows
+        ])
+        pulses = VGroup(*[Dot(c.get_center(), radius=.09, fill_color=YELLOW) for c in cars])
+        physics_label = words("six updates per car", 28, YELLOW).move_to([-3.7, 2.55, 0])
+        ray_label = words("108 rays per car", 28, BLUE).move_to([3.1, 2.55, 0])
+        self.play(FadeIn(cars), ShowCreation(links), FadeIn(rows), Write(physics_label))
+        self.add(pulses)
+        caption = self.caption("Each update uses the state produced by the previous one.")
         for j in range(6):
-            self.play(*[FadeIn(row[1][j]) for row in rows],
-                      *([ShowCreation(row[0][j-1]) for row in rows] if j else []),run_time=.35)
-        sequential=words("6 dependent substeps",24,MUTED).move_to([-3.4,-2.1,0])
-        self.play(Write(sequential))
-        grid=VGroup(*[Dot([1.2+j*.35,1.55-i*.9,0],radius=.055,fill_color=BLUE) for i in range(4) for j in range(12)])
-        arrow=Arrow([-.7,.2,0],[.7,.2,0],buff=.05,color=WHITE)
-        self.play(ShowCreation(arrow),Write(beam_title))
-        self.play(LaggedStartMap(FadeIn,grid,lag_ratio=.02),run_time=1.5)
-        ray_label=words("108 independent rays per car",24,MUTED).move_to([3.2,-2.1,0])
+            self.play(*[pulse.animate.move_to(row[j]) for pulse, row in zip(pulses, rows)],
+                      *[row[j].animate.set_color(YELLOW) for row in rows], run_time=.75)
+        self.wait(2)
+        barrier = DashedLine([-.75, -1.8, 0], [-.75, 2., 0]).set_stroke(WHITE, 1.5)
+        self.play(ShowCreation(barrier), FadeOut(caption))
+        caption = self.caption("Lidar starts after physics has written the new poses.")
         self.play(Write(ray_label))
-        self.caption("Physics finishes first. Lidar reads the updated or respawned pose.")
+        grid = VGroup(*[
+            VGroup(*[Dot([.9+.43*j, y, 0], radius=.055, fill_color=BLUE) for j in range(10)])
+            for y in ys
+        ])
+        # Each completed car state supplies all of that car's independent ray items.
+        for j in range(10):
+            self.play(*[TransformFromCopy(pulse, row[j]) for pulse, row in zip(pulses, grid)], run_time=.22)
+        sample = words("10 columns drawn / 108 computed", 22, MUTED).move_to([2.9, -2., 0])
+        self.play(FadeIn(sample))
+        self.wait(2)
+        self.play(FadeOut(caption))
+        selected = grid[2][6]
+        horizontal = DashedLine([.3, ys[2], 0], selected.get_center()).set_stroke(YELLOW, 2)
+        vertical = DashedLine([selected.get_x(), 2., 0], selected.get_center()).set_stroke(YELLOW, 2)
+        i_label = math_label("i=2", 25, YELLOW).move_to([.2, ys[2]-.3, 0])
+        j_label = math_label("j=6", 25, YELLOW).move_to([selected.get_x(), 2.15, 0])
+        self.play(ShowCreation(horizontal), ShowCreation(vertical), Write(i_label), Write(j_label),
+                  selected.animate.set_color(YELLOW))
+        self.play(FlashAround(selected, color=YELLOW))
+        destination = math_label(r"\texttt{obs}[2,\,8]=r_6", 35, YELLOW).move_to([2.9, -2.75, 0])
+        self.play(TransformFromCopy(selected, destination), run_time=1.5)
+        self.caption("The first two observation entries are steering and speed.")
         self.wait(3)
-        self.clear()
-        self.heading("One call to Env.step()")
-        stages=VGroup(*[words(t,29,c) for t,c in [
-            ("actions",BLUE),("physics",YELLOW),("lidar",BLUE),("RNG tick",MUTED)]])
-        stages.arrange(RIGHT,buff=1.25).move_to([0,.75,0])
-        self.play(LaggedStartMap(FadeIn,stages,lag_ratio=.3),run_time=2)
-        arrows=VGroup(*[Arrow(a.get_right(),b.get_left(),buff=.15,stroke_width=2) for a,b in zip(stages,stages[1:])])
-        self.play(LaggedStartMap(ShowCreation,arrows,lag_ratio=.25))
-        outputs=math_label(r"\text{observation}\qquad\text{reward}\qquad\text{done}",38,GREEN).move_to([0,-.6,0])
-        self.play(Write(outputs))
-        brace=Brace(outputs,DOWN,buff=.25)
-        shared=words("Warp buffers = Torch tensor storage",29,GREEN).next_to(brace,DOWN,buff=.2)
-        self.play(GrowFromCenter(brace),Write(shared))
-        self.caption("On the same CUDA device: shared output storage, Torch’s current stream.")
-        self.wait(3)
-        self.clear()
-        final=VGroup(words("Six physics updates per car, in order.",38,YELLOW),
-                     words("Independent work across cars and rays.",38,BLUE)).arrange(DOWN,buff=.55)
-        self.play(Write(final),run_time=2.2)
-        self.wait(3)
+
+    def shared_outputs(self):
+        self.heading("Where do the results go?")
+        xs = [-2.9, -2.32, -1.74, -1.16, -.58, 0.]
+        ys = [1.05, .4, -.25, -.9]
+        obs = VGroup(*[
+            VGroup(*[Rectangle(width=.53, height=.53).move_to([x, y, 0]).set_stroke(WALL, 1.4)
+                     for x in xs]) for y in ys
+        ])
+        reward = VGroup(*[Rectangle(width=.8, height=.53).move_to([1.25, y, 0]).set_stroke(WALL, 1.4) for y in ys])
+        done = VGroup(*[Rectangle(width=.65, height=.53).move_to([2.6, y, 0]).set_stroke(WALL, 1.4) for y in ys])
+        frame = Rectangle(width=7, height=3.25).move_to([-.15, .3, 0]).set_stroke(GREEN, 2)
+        headings = VGroup(words("observation", 26, GREEN).move_to([-1.45, 2.3, 0]),
+                          words("reward", 26, GREEN).move_to([1.25, 2.3, 0]),
+                          words("done", 26, GREEN).move_to([2.6, 2.3, 0]))
+        columns = VGroup(*[math_label(t, 22, MUTED).move_to([x, 1.65, 0])
+                          for x, t in zip(xs, [r"\delta", "v", "r_0", "r_1", r"\cdots", "r_{107}"])])
+        self.play(ShowCreation(frame), FadeIn(obs), FadeIn(reward), FadeIn(done), Write(headings), Write(columns))
+        caption = self.caption("Four environments shown; observation columns abbreviated.")
+        warp = words("Warp", 32, YELLOW).move_to([-5.2, .8, 0])
+        writes = words("writes", 24, MUTED).next_to(warp, DOWN, buff=.15)
+        warp_pointer = Arrow([-4.5, .45, 0], [-3.68, .45, 0], buff=0, fill_color=YELLOW)
+        self.play(Write(warp), FadeIn(writes), GrowArrow(warp_pointer))
+        # Illustrative buffer contents. The terminal row contains a respawned pose.
+        values = [
+            ["0.1", "2.0", "3.1", "2.4", r"\cdots", "4.2"],
+            ["-0.2", "1.5", "2.8", "3.0", r"\cdots", "1.6"],
+            ["0", "0", "2.5", "1.9", r"\cdots", "3.2"],
+            ["0.2", "3.0", "1.7", "2.1", r"\cdots", "2.9"],
+        ]
+        entries = VGroup(*[VGroup(*[math_label(value, 20, GREEN).move_to(cell)
+                                    for value, cell in zip(row, cells)]) for row, cells in zip(values, obs)])
+        reward_values = VGroup(*[math_label(value, 23, GREEN if value != "-25" else RED).move_to(cell)
+                                 for value, cell in zip(["0.3", "0.1", "-25", "0.4"], reward)])
+        done_values = VGroup(*[math_label(str(value), 23, RED if value else GREEN).move_to(cell)
+                               for value, cell in zip([0, 0, 1, 0], done)])
+        stages = VGroup(words("physics", 27, YELLOW), words("lidar", 27, BLUE), words("RNG tick", 27, MUTED))
+        stages.arrange(RIGHT, buff=1.2).move_to([0, -2.15, 0])
+        self.play(FadeIn(stages))
+        physics_cells = VGroup(*[cell for row in obs for cell in row[:2]], *reward, *done)
+        physics_values = VGroup(*[value for row in entries for value in row[:2]], *reward_values, *done_values)
+        self.play(physics_cells.animate.set_stroke(YELLOW, 2.5), FlashAround(stages[0], color=YELLOW))
+        self.play(LaggedStartMap(FadeIn, physics_values, lag_ratio=.06), run_time=2)
+        self.wait(2)
+        lidar_cells = VGroup(*[cell for row in obs for cell in row[2:]])
+        lidar_values = VGroup(*[value for row in entries for value in row[2:]])
+        self.play(lidar_cells.animate.set_stroke(BLUE, 2.5), FlashAround(stages[1], color=BLUE))
+        self.play(LaggedStartMap(FadeIn, lidar_values, lag_ratio=.05), run_time=2)
+        self.wait(2)
+        self.play(FlashAround(stages[2], color=WHITE))
+        self.play(FadeOut(caption))
+        caption = self.caption("The launches run in order on Torch's current CUDA stream.")
+        torch = words("Torch", 32, GREEN).move_to([5.05, .8, 0])
+        views = words("views", 24, MUTED).next_to(torch, DOWN, buff=.15)
+        torch_pointer = Arrow([4.35, .45, 0], [3.4, .45, 0], buff=0, fill_color=GREEN)
+        self.play(Write(torch), FadeIn(views), GrowArrow(torch_pointer), run_time=1.5)
+        self.play(Indicate(frame, color=GREEN), run_time=1.5)
+        self.wait(2)
+        self.play(FadeOut(stages), FadeOut(caption))
+        shared = words("Two views of the same output storage.", 30, GREEN).move_to([0, -2.15, 0])
+        self.play(Write(shared))
+        self.caption("When Warp and Torch use the same CUDA device.")
+        self.wait(4)
