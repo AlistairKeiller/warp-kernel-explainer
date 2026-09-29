@@ -54,8 +54,11 @@ turn. Their directions differ even though their lengths are equal. Move both
 arrows to a common starting point. The yellow arrow between their tips is
 the change in velocity.
 
-For a small angle, the tip moves approximately speed times the angle change.
-Shrink the turn and the straight difference approaches the little arc.
+This is a small-angle approximation, with the angle measured in radians.
+The exact straight-line difference is twice the speed times the sine of half
+the angle change. For a small angle, that sine approaches half the angle,
+giving speed times the angle change. Shrink the turn and the straight
+difference approaches the little arc.
 Dividing by elapsed time gives the change in velocity per second: acceleration.
 As the interval shrinks, this becomes speed times psi dot. Its direction is
 inward, perpendicular to the instantaneous velocity.
@@ -171,7 +174,11 @@ the nearest wall? The distance transform stores that answer at every pixel.
 The yellow circle makes the meaning of that number visible.
 
 Second: where are we along the track? A separate lookup gives the nearest
-centerline waypoint. Moving forward through those waypoints earns progress.
+centerline waypoint. Its integer index snaps to the selected waypoint as the
+car moves. Progress changes in whole waypoint steps: forward is positive,
+backward is negative, and staying at the same index gives zero. The green
+arrow and count show the change from our starting waypoint; the kernel uses
+the signed index change since the previous step, wrapped around the track loop.
 The reward also subtracts a near-wall penalty and the squared sideways offset
 from the centerline. Progress and wall penalties include speed-dependent
 weights; the displayed equation shows their structure.
@@ -245,7 +252,14 @@ Now look at the output arrays. This is a small illustrative
 view of the buffers: observations, rewards, and done flags. Physics writes
 steering and speed, along with reward and done. The red terminal row has already
 respawned, so its steering and speed are zero. Then lidar fills the range entries
-using those updated poses. The random clock advances after the two main kernels.
+using those updated poses.
+
+RNG means random number generator. The tick is one integer counter stored in
+the simulation device's memory, separate from these output arrays. After lidar,
+bump kernel adds one to tick zero, once per environment step. On a later
+respawn, the physics kernel combines that tick with the seed and car index to
+choose a new waypoint, friction scale and wheelbase scale. The displayed
+forty-two and forty-three are illustrative counter values.
 
 When Warp and Torch use the same CUDA device, Torch's output tensors view these
 same buffers. Both arrows point to the same displayed data. The launches use

@@ -5,7 +5,8 @@ A short, scene-based ManimGL explainer for the Warp kernels in the neighboring
 
 The physics chapter follows velocity components, steering geometry, turning
 acceleration, and the tire grip limit. Arc length explains heading change per
-second; comparing velocity arrows then derives the turning-acceleration formula. Requested and applied acceleration are
+second; comparing velocity arrows explains the small-angle approximation before
+deriving the turning-acceleration formula. Requested and applied acceleration are
 shown separately. The circle contracts when friction drops, and a pair of
 trajectories shows how a capped turn rate widens the car's path. Six RK4 updates
 then advance the state using the simulator's grip limits. An enlarged RK4
@@ -15,12 +16,14 @@ weighted vectors combine.
 The lidar chapter follows a ray through clearance circles that touch the nearest
 wall. The range brace and its equation run parallel to the ray. The ray fan
 then becomes a range profile that responds to the car's heading. The reward
-chapter links sideways offset to a square's area and a live penalty graph.
+chapter shows progress snapping between waypoint indices and links sideways
+offset to a square's area and a live penalty graph.
 The ending follows work items into an output table, showing which values physics
-and lidar write and how Torch views the same buffers. Narration and scene notes
+and lidar write, where the device RNG counter lives and when it advances,
+and how Torch views the same buffers. Narration and scene notes
 live beside the source.
 
-[Watch the rendered tour](videos/WarpKernelTour.mp4) (9:18, 1080p, silent).
+[Watch the rendered tour](videos/WarpKernelTour.mp4) (9:33, 1080p, silent).
 
 ## Render a scene
 

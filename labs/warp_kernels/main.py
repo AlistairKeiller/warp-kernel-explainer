@@ -405,9 +405,11 @@ class VehicleStep(FilmScene):
         self.play(GrowArrow(difference), ShowCreation(arc), ShowCreation(small_arc), Write(delta_label), Write(change_label))
         self.wait(2)
         formula = math_label(r"|\Delta\mathbf v|\approx v\,\Delta\psi", 36, YELLOW).move_to([3.1, 2.2, 0])
-        self.play(Write(formula))
+        approximation = words("Small-angle approximation (Δψ in radians)", 22, MUTED).next_to(formula, DOWN, buff=.2)
+        exact = math_label(r"|\Delta\mathbf v|=2v\sin(\Delta\psi/2)", 29).next_to(approximation, DOWN, buff=.2)
+        self.play(Write(formula), FadeIn(approximation), Write(exact))
         self.play(FadeOut(caption))
-        caption = self.caption("For a small turn, the tip moves about v × Δψ.")
+        caption = self.caption("For small Δψ, sin(Δψ/2) ≈ Δψ/2: the chord approaches the arc.")
 
         def update(_):
             a = angle.get_value()
@@ -427,7 +429,8 @@ class VehicleStep(FilmScene):
         self.play(angle.animate.set_value(.18), run_time=4)
         self.wait(2)
         divided = math_label(r"{|\Delta\mathbf v|\over\Delta t}\approx v\,{\Delta\psi\over\Delta t}", 35, YELLOW).move_to(formula)
-        self.play(TransformMatchingTex(formula, divided), FadeOut(caption), run_time=2)
+        self.play(TransformMatchingTex(formula, divided), FadeOut(caption),
+                  FadeOut(approximation), FadeOut(exact), run_time=2)
         formula = divided
         caption = self.caption("Acceleration is the change in velocity per second.")
         self.wait(2)
@@ -791,13 +794,31 @@ class RewardAndRespawn(FilmScene):
         nearest = Line(racer.get_center(),[-3,0,0]).set_stroke(GREEN, 4)
         lut = words("Where am I along the track?", 29, BLUE).move_to([0,2.55,0])
         self.play(Write(lut), ShowCreation(nearest), FlashAround(waypoints[2]))
-        travel = Arrow([-3,-.55,0],[1,-.55,0],buff=0,fill_color=GREEN)
-        progress = words("signed waypoint progress", 25, GREEN).next_to(travel, DOWN, buff=.15)
-        self.play(Transform(racer,car([1,.55,0])), Transform(nearest,Line([1,.55,0],[1,0,0]).set_stroke(GREEN,4)),
-                  ShowCreation(travel), run_time=2)
-        self.play(Write(progress), FlashAround(waypoints[6]))
+        travel = Arrow([-3,-.55,0],[-2,-.55,0],buff=0,fill_color=GREEN).set_opacity(0)
+        progress = words("signed waypoint progress: +0", 25, GREEN).move_to([-1,-1.05,0])
+        selected = Dot([-3,0,0], radius=.09, fill_color=GREEN)
+        discrete_note = words("Nearest waypoint index changes in whole steps.", 23, MUTED).move_to([0,-2.5,0])
+        self.play(Write(progress), FadeIn(selected), FadeIn(discrete_note))
+        self.add(travel)
+
+        def advance_waypoints(mob, alpha):
+            x = -3 + 4*alpha
+            # Equal spacing is illustrative; the simulator reads an integer LUT index.
+            index = int(np.clip(np.floor(x + 5 + .5), 0, len(waypoints)-1))
+            point = waypoints[index].get_center()
+            mob.become(car([x,.55,0]))
+            nearest.put_start_and_end_on(mob.get_center(), point)
+            selected.move_to(point)
+            if index > 2:
+                travel.become(Arrow([-3,-.55,0],[point[0],-.55,0],buff=0,fill_color=GREEN))
+            else:
+                travel.set_opacity(0)
+            progress.become(words(f"signed waypoint progress: {index-2:+d}", 25, GREEN).move_to([-1,-1.05,0]))
+
+        self.play(UpdateFromAlphaFunc(racer, advance_waypoints), run_time=4, rate_func=linear)
+        self.play(FlashAround(waypoints[6]))
         self.wait(1)
-        self.play(FadeOut(lut), FadeOut(travel), FadeOut(progress))
+        self.play(FadeOut(lut), FadeOut(travel), FadeOut(progress), FadeOut(selected), FadeOut(discrete_note))
         reward = math_label(r"r=\text{progress}-\text{wall penalty}-\text{offset}^2", 36).move_to([0,2.55,0])
         self.play(Write(reward))
         self.play(Indicate(nearest, color=RED), run_time=1)
@@ -1130,8 +1151,23 @@ class TheHandoff(FilmScene):
         self.play(lidar_cells.animate.set_stroke(BLUE, 2.5), FlashAround(stages[1], color=BLUE))
         self.play(LaggedStartMap(FadeIn, lidar_values, lag_ratio=.05), run_time=2)
         self.wait(2)
-        self.play(FlashAround(stages[2], color=WHITE))
         self.play(FadeOut(caption))
+        tick = math_label(r"\texttt{tick}[0]=42", 30, YELLOW).move_to([4.95,-.65,0])
+        tick_location = words("One counter on the\nsimulation device", 21, MUTED).next_to(tick, UP, buff=.2)
+        tick_pointer = Arrow(stages[2].get_top(), tick.get_bottom(), buff=.15, fill_color=MUTED)
+        tick_kernel = words("bump_kernel: tick[0] += 1", 24, YELLOW).move_to([0,-2.8,0])
+        self.play(FlashAround(stages[2], color=WHITE), Write(tick), FadeIn(tick_location),
+                  GrowArrow(tick_pointer), Write(tick_kernel))
+        caption = self.caption("RNG = random number generator; its tick advances once per Env.step().")
+        next_tick = math_label(r"\texttt{tick}[0]=43", 30, YELLOW).move_to(tick)
+        self.play(TransformMatchingTex(tick, next_tick))
+        tick = next_tick
+        self.wait(2)
+        self.play(FadeOut(caption))
+        caption = self.caption("Respawn combines the tick, seed and car index to choose fresh random values.")
+        self.wait(3)
+        self.play(FadeOut(tick), FadeOut(tick_location), FadeOut(tick_pointer),
+                  FadeOut(tick_kernel), FadeOut(caption))
         caption = self.caption("The launches run in order on Torch's current CUDA stream.")
         torch = words("Torch", 32, GREEN).move_to([5.05, .8, 0])
         views = words("views", 24, MUTED).next_to(torch, DOWN, buff=.15)

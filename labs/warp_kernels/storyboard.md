@@ -53,7 +53,9 @@ restrained color, staged reveals, and transformations that express relationships
 - The heading-rate derivation uses arc length `Δs = R Δψ`, with angles in
   radians, then divides by `Δt` to obtain `v = R ψ̇`. The velocity-change
   construction translates equal-length tangent vectors to a shared origin.
-  Its chord is approximately `v Δψ` for a small angle; shrinking the interval
+  Its exact chord is `2v sin(Δψ/2)` for the positive turn shown. The on-screen
+  small-angle approximation uses `sin(Δψ/2) ≈ Δψ/2`, with radians, to obtain
+  `v Δψ`; shrinking the interval
   gives `a_lateral = v ψ̇`, then substitution gives `v²/R`. The demonstration
   is a constant-speed left turn. For a general turn the inward acceleration
   magnitude is `v |ψ̇|`; signed components depend on the turn direction.
@@ -75,6 +77,10 @@ restrained color, staged reveals, and transformations that express relationships
 - Reward terms show structure, not all coefficients: signed wrapped waypoint
   progress and wall proximity also have speed factors. The collision example
   sets reward to −25. Timeout alone does not imply that penalty.
+- The car moves smoothly, while the selected waypoint, progress arrow endpoint
+  and signed count snap at nearest-waypoint boundaries. The displayed count is
+  relative to the starting waypoint; kernel reward uses the wrapped integer
+  index difference since the previous step. Equal spacing illustrates the LUT.
 - The centerline demonstration holds the other reward terms aside. It plots
   signed lateral offset against its square; the implementation computes the
   absolute offset before squaring, with the same result. The displayed
@@ -105,6 +111,10 @@ restrained color, staged reveals, and transformations that express relationships
 - CUDA uses a nearest-sampled texture; CPU uses direct EDT array reads.
   The final shared-storage claim applies when Warp and Torch share a CUDA device.
   A different Torch device uses explicit output copies.
+- The RNG tick is a separate one-element int32 array on the simulation device.
+  After lidar, `bump_kernel` increments `tick[0]` once per `Env.step()`.
+  Respawn initializes randomness from the seed and `tick[0] * num_envs + i`.
+  The final counter animation uses illustrative values 42 and 43.
 
 ## Source map
 
@@ -117,6 +127,7 @@ Paths are relative to the sibling `warporacer` repository.
 | `warporacer/sim.py:63` | four RK4 slopes and steering midpoints |
 | `warporacer/sim.py:75` | array and texture ray marching |
 | `warporacer/sim.py:112` | one-car work item |
+| `warporacer/sim.py:107` | RNG counter increment after lidar |
 | `warporacer/sim.py:152` | EDT, waypoint progress, reward, collision and reset |
 | `warporacer/sim.py:202` | `(i, j)` lidar work item and observation writes |
 | `warporacer/sim.py:275` | persistent buffers and Torch views |
