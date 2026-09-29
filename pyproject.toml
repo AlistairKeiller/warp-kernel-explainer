@@ -1,0 +1,10 @@
+[project]
+name = "warp-kernel-explainer"
+version = "0.1.0"
+description = "A ManimGL explainer for the Warp simulation kernels in warporacer"
+requires-python = ">=3.13"
+dependencies = ["manimgl"]
+
+[tool.uv.sources]
+manimgl = { git = "https://github.com/AlistairKeiller/manim" }
+
