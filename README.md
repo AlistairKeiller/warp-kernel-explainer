@@ -1,69 +1,77 @@
 # How Warp moves the cars
 
-A short, scene-based ManimGL explainer for the Warp kernels in the neighboring
+A silent ManimGL explainer for the Warp kernels in the neighboring
 [`warporacer`](../warporacer) project.
 
-The physics chapter follows velocity components, steering geometry, turning
-acceleration, and the tire grip limit. Arc length explains heading change per
-second; comparing velocity arrows explains the small-angle approximation before
-deriving the turning-acceleration formula. Requested and applied acceleration are
-shown separately. The circle contracts when friction drops, and a pair of
-trajectories shows how a capped turn rate widens the car's path. Six RK4 updates
-then advance the state using the simulator's grip limits. An enlarged RK4
-interval shows where its four derivative samples come from and how their
-weighted vectors combine.
+Follow one car through **Move → Score → Sense → Return**, then see how that
+same work scales to thousands of independent environments. The opening explains
+state, action, and kernel before introducing code. A small guide stays visible
+throughout the film. Each diagram answers one question, and transitions keep
+the previous result visible while explaining why the next question follows.
 
-The lidar chapter follows a ray through clearance circles that touch the nearest
-wall. The range brace and its equation run parallel to the ray. The ray fan
-then becomes a range profile that responds to the car's heading. The reward
-chapter shows progress snapping between waypoint indices and links sideways
-offset to a square's area and a live penalty graph.
-The ending follows work items into an output table, showing which values physics
-and lidar write, where the device RNG counter lives and when it advances,
-and how Torch views the same buffers. Narration and scene notes
-live beside the source.
+The physics chapter builds steering geometry and the shared grip budget from
+visible motion. A short clarification connects the geometric radius to the
+kernel's heading-rate request and shows the straight-wheel case. RK4 uses a
+time ruler, faint trial cars, and four samples before committing one actual
+update. Reward terms appear individually. Lidar reuses the familiar wall-distance
+circle, then turns rays into an observation profile. The ending assembles the
+output buffers and returns to the original car.
 
-[Watch the rendered tour](videos/WarpKernelTour.mp4) (9:33, 1080p, silent).
+[Watch the rendered tour](videos/WarpKernelTour.mp4) (14:04, 1080p, 30 fps, silent).
+[Chapter timestamps](videos/chapters.md) are also embedded in the MP4.
+Explanations appear in the frame; captions wrap and stay visible long enough
+to read before being replaced. No audio is needed to follow the sequence.
 
-## Render a scene
+## Render
 
 This project uses the ManimGL fork used by `UCI_F1tenth_slides`.
+Install the usual ManimGL requirements, including LaTeX and FFmpeg.
 
 ```bash
 uv sync
-uv run manimgl labs/warp_kernels/main.py \
-  Opening VehicleStep RewardAndRespawn WarpLidar TheHandoff \
-  -w -r 1920x1080 --fps 30 --video_dir videos
-ffmpeg -y -f concat -safe 0 -i videos/chapters.ffconcat -c copy videos/WarpKernelTour.mp4
+uv run python labs/warp_kernels/render.py --review
+
+# Faster 720p review, stored separately in videos/preview/
+uv run python labs/warp_kernels/render.py --preview --review
+
+# Render an individual chapter
+uv run manimgl labs/warp_kernels/main.py VehicleStep -w -r 1920x1080 --fps 30 --video_dir videos
+
+# Reassemble existing chapter files with navigation markers
+uv run python labs/warp_kernels/render.py --assemble-only
 ```
 
-Install the usual ManimGL requirements, including LaTeX and FFmpeg. The explicit
-`--video_dir` keeps the chapter files in this project's `videos/` directory.
-For an interactive preview, omit `-w`; `-p` enables presenter pauses.
-The last command joins the five silent chapter renders in order. The voice-over
-in `labs/warp_kernels/narration.md` is an editorial draft; record it and retime
-holds before producing a narrated cut.
+`render.py` renders all five chapters and joins them into the tour with MP4
+chapter markers. `--review` extracts a contact sheet for every caption beat into
+`videos/review/`. An existing environment can be used with
+`--manimgl /absolute/path/to/manimgl`. For interactive preview, omit `-w` from
+the individual scene command; `-p` enables presenter pauses.
 
 ## Project layout
 
 ```text
 labs/
 └── warp_kernels/
-    ├── main.py         # Renderable Manim scenes and small geometry helpers
-    ├── narration.md    # Voice-over draft, organized by scene and beat
-    └── storyboard.md  # Visual intent, timing, and source-code map
+    ├── main.py         # Manim scenes, geometry, captions, and reading time
+    ├── render.py       # Render, assemble, add chapters, extract review frames
+    ├── narration.md    # Companion explanation, organized by scene and beat
+    └── storyboard.md   # Visual intent, reference study, and source-code map
 ```
 
 The `labs/<topic>/` directory follows the self-contained lab layout in
-`UCI_F1tenth_slides/labs/`: scene source and the material needed to present it
-stay together. `main.py` follows the 3Blue1Brown videos repository's scene-first
-working format: named scenes are authored as animation code, with one visual
-idea developed at a time. These are original drawings and narration; no scenes,
-assets, or helper code were copied from `3b1b-videos`.
+`UCI_F1tenth_slides/labs/`. `main.py` follows the 3Blue1Brown repository's
+scene-first working format, with one visual idea developed at a time.
+The [reference study](labs/warp_kernels/storyboard.md#reference-study) links the
+specific local sources and the presentation decisions they informed.
+These are original drawings and text; no scenes, assets, or helper code were
+copied from `3b1b-videos`. The companion script explains the same story in prose;
+the silent film's captions are authored alongside its animations.
 
 ## Technical scope
 
-The film follows `Env.step()` in `warporacer/warporacer/sim.py`:
+The film follows the bicycle simulator at warporacer commit
+`e16e4473cb86e6ae2e1fa1b078e5a1e04b20d7f2`, specifically `Env.step()` in
+`warporacer/warporacer/sim.py`:
 
 1. A Torch action batch is copied into the persistent Warp action buffer.
 2. `step_kernel` runs once per environment. Each logical item integrates one

@@ -1,12 +1,20 @@
-# Voice-over script
+# Companion script
 
-The renders are silent. Each paragraph follows a visible beat; hold on the
-picture after its claim. Keep the tone curious and leave room for the motion.
+The film is silent and teaches through its pictures and on-screen captions.
+This companion explanation follows the same story in prose. Captions and their
+reading time are authored in `main.py`; this is not a synchronized subtitle file.
 
 ## Opening
 
-Watch just one car for a moment. Its next position depends on its own state,
-its own controls, and its track. It doesn't need to know where another car is.
+What happens between two frames of a racing simulation? Start with one car.
+We know its position and heading, its speed, and its wheel angle. Together,
+those numbers are its state: a description of the car right now.
+
+An action tells the steering wheel to turn and asks the car to accelerate or
+brake. The simulator takes that state and action, predicts a move, scores it,
+and measures what the car can see from its new position. The learning code
+receives those results and can choose another action. Our story is one complete
+step: Move, Score, Sense, and Return.
 
 So imagine making thousands of copies of this little world. These are separate
 environments, even if they use the same track. Each can take its next step
@@ -14,8 +22,10 @@ independently. Eight thousand is a representative batch, not a physical GPU
 core count.
 
 Watch the worlds advance at different rates. Each car uses its own action and
-state. Pick environment five and bring it closer. Its action changes its state
-inside work item five of `step_kernel`. What happens inside that update?
+state. A kernel is a program applied to many work items. Here, one physics work
+item owns one car. Warp distributes those tasks across the available hardware.
+Pick environment five and bring it closer. Let's follow its update before we
+put the batch back together.
 
 ## VehicleStep
 
@@ -23,7 +33,8 @@ inside work item five of `step_kernel`. What happens inside that update?
 
 Start with the velocity arrow. The car moves in the direction it points, and
 its length tells us the speed. Split it into horizontal and vertical parts.
-Those are the rates at which x and y change.
+Those are the rates at which x and y change. The letter v means speed, and psi
+means heading. A dot over a variable means its change per second.
 
 Turn the arrow, and the two components change together. Make it longer, and
 both grow. Over a short enough interval, multiplying velocity by time gives
@@ -35,6 +46,9 @@ interval, its velocity is changing too.
 Draw just the front and rear wheels. A wheel points along its local motion,
 so the turn center must lie on a line perpendicular to that wheel. Draw the
 two perpendiculars and find where they meet.
+
+R is a geometric aid for understanding a held, nonzero wheel angle. The kernel
+computes heading rate directly from wheel angle and speed.
 
 The wheelbase and turning radius make a right triangle. Its geometry gives
 radius equals wheelbase divided by the tangent of the steering angle. Turn
@@ -48,6 +62,12 @@ Divide that distance by the elapsed time. On the left we get speed. On the
 right we get radius times the heading change per second. That last quantity
 is psi dot: the time derivative of the heading. So psi dot equals speed
 divided by radius. A smaller circle at the same speed means faster turning.
+
+Substitute radius equals wheelbase divided by tangent of wheel angle. The
+heading-rate request becomes speed times tangent of wheel angle divided by
+wheelbase: the expression used by the kernel. With straight wheels, tangent
+of zero is zero, so heading stays fixed. Zero steering-rate input holds the
+current wheel angle; it does not straighten turned wheels.
 
 Now hold the speed constant and compare the velocity before and after a short
 turn. Their directions differ even though their lengths are equal. Move both
@@ -267,3 +287,8 @@ Torch's current stream, so physics finishes before lidar reads its results.
 
 The policy receives observations, rewards, and done flags from that shared
 output storage.
+
+Return to the car from the opening. Move it using the available grip. Score
+its progress. Measure its new view. Return the results to Torch. The program
+stays the same, while each car supplies its own state, action, and track.
+That independence gives Warp thousands of useful tasks to do in parallel.

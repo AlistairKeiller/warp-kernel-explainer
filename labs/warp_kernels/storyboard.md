@@ -1,18 +1,43 @@
 # Scene notes
 
+The film follows one car through Move, Score, Sense, and Return. The opening
+defines the inputs in everyday language. The final scene returns to the same
+track and recaps those four steps. The viewer knows both the current question
+and its place in the larger story.
+
 The film develops one visible object at a time. Color follows meaning:
 yellow is the selected car, local physics, or a clearance query; blue is
 motion, centerline information, or completed lidar measurements; red marks a
-request beyond the grip limit or a collision; green marks applied acceleration. Labels sit beside their geometry. The frame clears when the explanation moves to a different subject.
+request beyond the grip limit or a collision; green marks applied acceleration.
+Labels sit beside their geometry. The chapter guide and question survive changes
+of diagram. A bridge isolates the result just found, states its meaning, and asks
+the next question before the next picture appears.
+
+This cut is intentionally silent. Captions explain what to notice, wrap in a
+reserved bottom area, and replace the previous caption. A caption stays readable
+for at least `0.7 + word_count / 3.1` seconds before it fades. Manipulate one
+quantity at a time: turn the velocity, then increase its length; turn the wheel
+further once; keep the request fixed while changing grip.
 
 ## Reference study
 
-The local `3b1b-videos` sources informed the presentation:
+The local `3b1b-videos` sources were read directly, including scene structure,
+layout conventions, object transformations, and explanatory pauses:
 
-- `_2024/manim_demo/lorenz.py`: calculate trajectories, then animate objects
+- [`LorenzAttractor`](../../../3b1b-videos/_2024/manim_demo/lorenz.py): calculate trajectories, then animate objects
   along them; equations describe the motion the viewer is seeing.
-- `_2024/transformers/network_flow.py`: introduce a concrete instance, expand
+- [`HighLevelNetworkFlow`](../../../3b1b-videos/_2024/transformers/network_flow.py): introduce a concrete instance, expand
   it into a repeated structure, and select part of that structure to explain.
+- [`AttentionPatterns`](../../../3b1b-videos/_2024/transformers/attention.py): reveal meaningful groups in sequence;
+  carry a familiar object into a more abstract representation. This informs
+  car → world → batch and ray → range → observation slot.
+- [`WaysToCombine`](../../../3b1b-videos/_2022/convolutions/discrete.py): align related diagrams;
+  color mathematical quantities to match their visual counterparts.
+- [`DifferentConceptions`](../../../3b1b-videos/_2016/eola/chapter1.py): establish a
+  concrete meaning for vectors before symbolic operations. The car's velocity
+  precedes its components, and RK4 sample arrows precede their weighted sum.
+- [`MLWithinDeepL`](../../../3b1b-videos/_2024/transformers/ml_basics.py): preserve
+  context when expanding or extracting part of a larger structure.
 
 These chapters use original geometry and narration, with no imported reference
 assets or repository-specific helpers. They use ManimGL `Tex` for mathematics,
@@ -22,7 +47,7 @@ restrained color, staged reveals, and transformations that express relationships
 
 | Scene | Visual development | Main takeaway |
 | --- | --- | --- |
-| `Opening` | A car travels around a large track; that world shrinks into twelve separate worlds; the worlds advance at different rates; one environment enlarges beside its state and action. | One physics work item owns one independent car. |
+| `Opening` | Start with one car; name its state and action in plain language; preview move, score, and sense; shrink that world into twelve separate worlds; select environment five and introduce the kernel. | A kernel repeats a program across independent work items. |
 | `VehicleStep` | Resolve velocity into components; construct the turn center from wheel normals; derive heading rate from arc length; compare translated velocity arrows and take the small-interval limit; substitute heading rate to obtain inward acceleration; double speed; construct the acceleration circle; move a request beyond it; animate the remaining-acceleration chord, braking, reduced friction, and turn saturation; compare requested and capped paths; construct four RK4 trial states and add their weighted displacement vectors; integrate six real substeps. | The combined acceleration has a limit. The kernel clips the request to what the tires can supply. |
 | `RewardAndRespawn` | A wall-distance circle is replaced by a waypoint projection; progress and lateral offset become reward terms; a growing square and live parabola explain the offset penalty; the car footprint crosses the wall and respawns. | Wall distance and waypoint lookup answer different questions. |
 | `WarpLidar` | A ray advances exactly one clearance radius at a time; its segments become a range with a brace parallel to the ray; a fan expands the work into `(car, beam)` indices and observation slots; the rays straighten into a range profile that changes as the car turns. | Marching is sequential within a ray, independent across rays. |
@@ -50,12 +75,17 @@ restrained color, staged reveals, and transformations that express relationships
   the final sum have lengths proportional to `h * weight * derivative / 6`.
 - The steering construction uses enlarged wheel angles so the triangle is
   readable; these are not the simulator's 0.4189 rad steering limit.
+- R is a geometric aid for the nonzero-angle turn. The heading-rate section
+  substitutes `R = L/tan(δ)` to show the kernel request `v tan(δ)/L`, then
+  briefly shows straight wheels: `δ = 0` gives zero heading rate. Zero
+  steering-rate input preserves an existing angle; it does not recenter it.
 - The heading-rate derivation uses arc length `Δs = R Δψ`, with angles in
   radians, then divides by `Δt` to obtain `v = R ψ̇`. The velocity-change
   construction translates equal-length tangent vectors to a shared origin.
-  Its exact chord is `2v sin(Δψ/2)` for the positive turn shown. The on-screen
-  small-angle approximation uses `sin(Δψ/2) ≈ Δψ/2`, with radians, to obtain
-  `v Δψ`; shrinking the interval
+  Its exact chord is `2v sin(Δψ/2)` for the positive turn shown. The screen
+  shows the chord approaching the arc and uses `|Δv| ≈ v Δψ`, with radians.
+  The exact trigonometric expression stays in the companion script.
+  Shrinking the interval
   gives `a_lateral = v ψ̇`, then substitution gives `v²/R`. The demonstration
   is a constant-speed left turn. For a general turn the inward acceleration
   magnitude is `v |ψ̇|`; signed components depend on the turn direction.

@@ -7,3 +7,6 @@ media/
 .DS_Store
 
 latex_cache/
+videos/**/*.beats.json
+videos/review/
+videos/preview/
