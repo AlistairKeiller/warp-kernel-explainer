@@ -1,294 +1,189 @@
 # Companion script
 
-The film is silent and teaches through its pictures and on-screen captions.
-This companion explanation follows the same story in prose. Captions and their
-reading time are authored in `main.py`; this is not a synchronized subtitle file.
+The film is silent and teaches through its pictures and captions. This script
+tells the same story in prose, with a little more detail where the film keeps
+things short. It is not a synchronized subtitle file; the captions and their
+reading time live in `main.py`.
 
 ## Opening
 
 What happens between two frames of a racing simulation? Start with one car.
-We know its position and heading, its speed, and its wheel angle. Together,
+We know its position and heading, its speed, and its wheel angle. Together
 those numbers are its state: a description of the car right now.
 
-An action tells the steering wheel to turn and asks the car to accelerate or
-brake. The simulator takes that state and action, predicts a move, scores it,
+An action asks the steering wheel to turn and the car to accelerate or brake.
+The simulator takes the state and the action, moves the car, scores that move,
 and measures what the car can see from its new position. The learning code
-receives those results and can choose another action. Our story is one complete
-step: Move, Score, Sense, and Return.
+receives those results and chooses the next action. One complete step is Move,
+Score, Sense, and Return.
 
-So imagine making thousands of copies of this little world. These are separate
-environments, even if they use the same track. Each can take its next step
-independently. Eight thousand is a representative batch, not a physical GPU
-core count.
+Now imagine thousands of copies of this little world. They are separate
+environments even when they use the same track, so each can take its next step
+on its own. Eight thousand is a representative batch, not a count of GPU cores.
 
-Watch the worlds advance at different rates. Each car uses its own action and
-state. A kernel is a program applied to many work items. Here, one physics work
-item owns one car. Warp distributes those tasks across the available hardware.
-Pick environment five and bring it closer. Let's follow its update before we
-put the batch back together.
+A kernel is one program applied to many work items. Here one physics work item
+owns one car. Warp hands those items to the hardware. Pick environment five and
+bring it closer; we follow its update before putting the batch back together.
 
 ## VehicleStep
 
 ### Velocity and position
 
-Start with the velocity arrow. The car moves in the direction it points, and
-its length tells us the speed. Split it into horizontal and vertical parts.
-Those are the rates at which x and y change. The letter v means speed, and psi
-means heading. A dot over a variable means its change per second.
+The velocity arrow points where the car is going, and its length is the speed.
+Split it into horizontal and vertical parts: those are the rates at which x and
+y change. The letter v is speed, psi is heading, and a dot means change per
+second. Turn the arrow and both parts change together; lengthen it and both
+grow. Over a short time the car moves about velocity times time. That works
+while the direction barely changes, but a turning car changes direction.
 
-Turn the arrow, and the two components change together. Make it longer, and
-both grow. Over a short enough interval, multiplying velocity by time gives
-approximately how far the car moves. But if the car is turning during that
-interval, its velocity is changing too.
+### Steering
 
-### Steering and turning acceleration
+Draw only the front and rear wheels. Each wheel rolls straight ahead, so its
+turn center lies on a line perpendicular to it. The two perpendiculars meet at
+the turn center. The wheelbase and the radius form a right triangle, so the
+radius is the wheelbase divided by the tangent of the wheel angle. Turn the
+wheel further and the center moves closer: the circle tightens.
 
-Draw just the front and rear wheels. A wheel points along its local motion,
-so the turn center must lie on a line perpendicular to that wheel. Draw the
-two perpendiculars and find where they meet.
+Drive that circle at speed v. Each lap covers two pi R and turns the heading by
+two pi, so the heading turns at v over R radians per second. Substitute the
+radius and the heading rate becomes v tan delta over L. That is exactly the
+request the kernel computes from wheel angle and speed. With straight wheels
+the tangent is zero and the heading holds. A zero steering-rate action keeps
+the current wheel angle; it does not straighten turned wheels.
 
-R is a geometric aid for understanding a held, nonzero wheel angle. The kernel
-computes heading rate directly from wheel angle and speed.
+### Turning needs acceleration
 
-The wheelbase and turning radius make a right triangle. Its geometry gives
-radius equals wheelbase divided by the tangent of the steering angle. Turn
-the front wheel further, and the intersection moves closer. The turn tightens.
+Drive around a circle at a steady speed. The velocity arrow keeps changing
+direction, and a changing velocity is an acceleration even when the speed is
+constant. For a small turn the change in velocity is about the speed times the
+change in heading, measured in radians; the exact chord is twice the speed
+times the sine of half the angle. Divide by the elapsed time and shrink the
+interval: the inward acceleration is speed times the heading rate, which with
+the heading rate v over R is v squared over R.
 
-Call the heading angle psi. As the car travels around a circle, its heading
-turns through the same angle as the radius. An angle change of delta psi
-radians corresponds to an arc length of radius times delta psi.
+Double the speed on the same circle and the required turning acceleration
+becomes four times larger. A bend that is easy at low speed can ask more of the
+tires than they have when approached faster.
 
-Divide that distance by the elapsed time. On the left we get speed. On the
-right we get radius times the heading change per second. That last quantity
-is psi dot: the time derivative of the heading. So psi dot equals speed
-divided by radius. A smaller circle at the same speed means faster turning.
+### The grip circle
 
-Substitute radius equals wheelbase divided by tangent of wheel angle. The
-heading-rate request becomes speed times tangent of wheel angle divided by
-wheelbase: the expression used by the kernel. With straight wheels, tangent
-of zero is zero, so heading stays fixed. Zero steering-rate input holds the
-current wheel angle; it does not straighten turned wheels.
+Put those demands in a new picture. Up and down is turning; left and right is
+braking and throttle. Friction limits how hard the tires can push: mu times the
+car's weight, which divided by mass is an acceleration of mu g. Every
+acceleration inside a circle of that radius is possible. The circle is the grip
+budget.
 
-Now hold the speed constant and compare the velocity before and after a short
-turn. Their directions differ even though their lengths are equal. Move both
-arrows to a common starting point. The yellow arrow between their tips is
-the change in velocity.
+Inside the circle a request is applied as asked. Ask for more throttle than the
+grip allows and the simulator clips it: it keeps the turning component and
+fits throttle or braking into the chord that remains, whose half-width is the
+square root of mu g squared minus the turning acceleration squared. A harder
+turn leaves less of that slice; braking draws from the same slice.
 
-This is a small-angle approximation, with the angle measured in radians.
-The exact straight-line difference is twice the speed times the sine of half
-the angle change. For a small angle, that sine approaches half the angle,
-giving speed times the angle change. Shrink the turn and the straight
-difference approaches the little arc.
-Dividing by elapsed time gives the change in velocity per second: acceleration.
-As the interval shrinks, this becomes speed times psi dot. Its direction is
-inward, perpendicular to the instantaneous velocity.
-
-Now substitute the relationship we already found. Psi dot is speed over
-radius, so speed times psi dot is speed times speed over radius. That gives
-speed squared over radius. These are two expressions for the same inward
-acceleration, for the constant-speed left turn shown here.
-
-Now double the speed, keeping the same turn. The required turning acceleration
-becomes four times as large. This is why a bend that is easy at low speed can
-ask too much of the tires when approached faster.
-
-### Constructing the acceleration circle
-
-Let's put those demands in a different picture. These axes measure acceleration.
-Horizontal means speeding up or braking; vertical means turning left or right.
-
-The blue and yellow components form a right triangle. The green diagonal is
-the combined acceleration. Its length follows directly from Pythagoras.
-
-In this model, the tire force is limited by friction: mu times the normal
-force, which we take to be the car's weight. Divide by mass, and the acceleration
-limit is mu g. Draw every possible direction with that same maximum length.
-The endpoints trace a circle.
-
-A point inside the circle is an acceleration the tires can supply. Move it
-around and both components change, but their combined length stays within the
-limit.
-
-### Asking for more than the tires can supply
-
-Now keep the turning demand fixed and ask for more throttle. The red point is
-what we requested. Once it leaves the circle, the green point can no longer
-follow it. The requested acceleration exceeds the available grip.
-
-Here is what this simulator does: it keeps the turning component, then clips
-the forward component at the circle. The red gap shows the acceleration that
-was requested but cannot be applied. Asking for more doesn't increase the
-force the tires can provide.
-
-Cut the circle at this turning acceleration. The blue chord shows how much
-forward acceleration or braking is still possible. Pythagoras gives its
-half-width: the square root of mu g squared minus turning acceleration squared.
-
-Increase the turning demand. That chord shrinks. Ease the turn, and it grows
-again. Move to the left side and the same constraint applies to braking.
-Braking and cornering share the available tire force too.
-
-### Lower friction
-
-Now leave the request alone and reduce friction. The circle itself shrinks.
-A request that previously fit can become impossible without changing the
-controls at all. The green point moves inward to the new boundary.
-
-Exceeding the circle doesn't change mu in this simulator. It means the demand
-is larger than the available grip. Lower mu is a separate change to that grip.
-The model represents the limit by capping accelerations; it doesn't simulate
-the detailed motion of a slipping tire.
-
-Finally, ask for more turning than even the top of the circle allows. The
-kernel caps the turning component first. At that limit, no forward acceleration
-remains.
+Lower the friction and the whole circle shrinks around the same request. A
+request that used to fit may no longer fit without any change to the controls.
+Exceeding the circle does not change mu; the model caps accelerations rather
+than simulating a slipping tire. Finally, ask for more turning than the top of
+the circle allows. The kernel caps turning first, and at that limit nothing is
+left for throttle.
 
 ### The effect on the path
 
-What does that cap do to the car? The red curve shows the requested turn.
-The green car travels at the same speed, but it cannot change heading quickly
-enough to follow that curve. Its path is wider.
-
-The minimum turning radius grows with speed squared and shrinks as available
-grip increases. Reducing speed reduces the acceleration needed to follow a
-particular bend.
+The red curve is the requested turn. The green car travels at the same speed
+but cannot change heading fast enough, so its path is wider. The minimum radius
+grows with speed squared and shrinks with grip. Slowing down lowers the turning
+acceleration a bend needs.
 
 ### Four trial states
 
-Before committing to the next state, sample how the motion changes during the
-interval. We enlarge the interval here so the predictions can be distinguished.
-The simulation itself uses much smaller steps.
+Before committing to the next state, sample how the motion changes across the
+interval. The interval is enlarged here so the predictions stay distinguishable.
+Start from the current state; that gives k one. Use it to predict a state
+halfway through the interval and sample the motion there for k two. Refine the
+halfway prediction with k two and sample again for k three. Predict the end of
+the interval with k three and take one last sample, k four. Each evaluation
+uses the steering angle at its own time and applies the grip limits.
 
-Start by evaluating the current state. That gives the first derivative, k one.
-Use it to predict a state halfway through the interval, then evaluate the
-motion there. That's k two.
-
-Make another halfway prediction, this time using k two. Its derivative gives
-k three. Finally, use k three to predict the end of the interval, where we
-sample k four. Each evaluation uses the steering angle at its corresponding
-time and applies the same grip limits.
-
-These dots are trial states, not four successive moves of the car. To get the
-actual update, combine the four derivatives. The middle two receive twice the
-weight. Watch the position components become a chain of arrows. Their sum takes
-us from the starting position to the new position. The same weighted sum updates
-heading and speed.
+These dots are trial states, not four successive moves. Combine the four
+samples with weights one, two, two, one. The position components chain into a
+path from the start to the new position, and the same weighted sum updates
+heading and speed. Only now does the car move.
 
 ### Six small updates
 
-Now we can compute the next state. One simulation step lasts a sixtieth of a
-second. The kernel divides that into six smaller intervals.
-
-Each interval uses RK4: four estimates of the rates of change, with the middle
-two carrying twice the weight. Every estimate applies the grip limits we just
-constructed. Steering advances through the interval as well.
-
-The displacement here is magnified so we can see each update. One produces
-the starting state for the next, so these six updates happen in order within
-each car's work item.
+One simulation step lasts a sixtieth of a second. The kernel divides it into
+six intervals and applies one RK4 update to each, with every evaluation under
+the grip limits and the steering angle advancing through the interval. Each
+result becomes the next starting state, so the six updates run in order within
+one car's work item. The movement on screen is magnified so each update is
+visible.
 
 ## RewardAndRespawn
 
-After the move, the map answers two different questions. First: how close is
-the nearest wall? The distance transform stores that answer at every pixel.
-The yellow circle makes the meaning of that number visible.
+After the move, two precomputed maps answer two questions. How close is the
+nearest wall? A distance transform, built once when the track loads, stores
+that answer at every pixel. Where are we along the track? A second lookup table
+gives the nearest centerline waypoint. Its index changes in whole steps; the
+signed change since the previous step, wrapped around the loop, is the
+progress. Forward counts positive and backward negative.
 
-Second: where are we along the track? A separate lookup gives the nearest
-centerline waypoint. Its integer index snaps to the selected waypoint as the
-car moves. Progress changes in whole waypoint steps: forward is positive,
-backward is negative, and staying at the same index gives zero. The green
-arrow and count show the change from our starting waypoint; the kernel uses
-the signed index change since the previous step, wrapped around the track loop.
-The reward also subtracts a near-wall penalty and the squared sideways offset
-from the centerline. Progress and wall penalties include speed-dependent
-weights; the displayed equation shows their structure.
+The reward adds progress, subtracts a penalty inside a short band near a wall,
+and subtracts the squared sideways offset from the centerline. Progress and the
+wall penalty also carry speed factors; the film shows the structure.
 
-Let's look at that square. Draw the sideways offset as one side of a square.
-The square's area is the penalty. The dot on the graph shows exactly the same
-relationship.
+Why square the offset? Draw the offset as one side of a square. Its area is the
+penalty, and the dot on the parabola shows the same relationship. Move twice as
+far from the centerline and four copies of the original square fit inside the
+new one. The same distance on either side costs the same.
 
-Move twice as far from the centerline. Each side of the square doubles, so
-four copies of the original square now fit inside it. The penalty is four
-times larger. Bring the car back toward the centerline and that cost falls.
-Cross to the other side and the square grows again. The same distance on either
-side has the same cost.
-
-The car has size. Subtract half its diagonal from the wall distance to get
-clearance. If that clearance becomes negative, the kernel marks the episode
-done and replaces the reward with minus twenty-five.
-
-It also respawns the car immediately: a new waypoint, zero speed and steering,
-and fresh friction and wheelbase scales within fifteen percent of nominal.
-A ten-thousand-step timeout also resets, but doesn't by itself apply the crash
-penalty. The observations will describe the respawned car.
+The car has size. Subtract half its diagonal from the wall distance to get the
+clearance. If clearance goes negative the episode is done, the reward is minus
+twenty-five, and the car respawns immediately at a random waypoint with zero
+speed, straight wheels, and fresh friction and wheelbase scales within fifteen
+percent of nominal. A ten-thousand-step timeout also respawns but carries no
+crash penalty.
 
 ## WarpLidar
 
-Now take one ray. How far can it travel before it hits a wall?
+Take one ray. How far does it travel before it hits a wall? At its starting
+point, look up the wall distance. The nearest wall may be beside the ray, but
+no wall lies inside a circle of that radius, so the ray can safely jump one
+radius. At the new point look the distance up again, draw the new circle, and
+jump again. The jumps shrink as the ray closes in on the wall. Add them up and
+the sum is the ray's range, capped at twenty meters.
 
-At its starting point, ask the distance field for the nearest wall. Notice
-that the nearest wall can be beside the ray. Still, a circle of that radius
-contains no wall, so we can advance by one radius along the ray.
+The drawing uses smooth walls. The implementation reads pixel distances from the
+raster map, stops on a zero sample or the range cap, and converts back to
+meters. On CUDA the map is read through a texture; on CPU from an array.
 
-At the new point, ask again. Draw the new circle, advance by its radius, and
-repeat. Every blue segment was a yellow radius. Add those lengths to get the
-range measurement.
-
-This drawing uses smooth walls to show the geometry. The implementation reads
-pixel distances from the precomputed EDT, stops on a zero sample or at its
-range limit, and converts the total back into meters. The range is capped at
-twenty meters.
-
-Now spread the rays over a two-hundred-seventy-degree fan. We draw nineteen;
-the simulator computes one hundred and eight. Each ray can do its own march.
-So this time, a work item has two indices: car i and beam j.
-
-That ray writes one entry in the observation row, after steering and speed.
-On CUDA the distance field is read through a texture; on CPU it is read from
-an array. Both use this same marching procedure.
-
-Straighten each ray into a bar, keeping the bars in beam-angle order. This is
-the scan as a list of distances. The little shape on the right and the fan on
-the left contain the same measurements.
-
-Now turn the car. The sensor moves with it, every ray meets the room in a new
-place, and the bars change with those distances. That changing list is what the
-policy receives in the lidar portion of its observation.
+Now spread rays over a 270-degree fan. The film draws nineteen; the simulator
+computes 108. Each ray marches on its own, so a lidar work item has two indices:
+car i and beam j. Straighten the rays into bars in beam order and you have the
+scan as a list of distances. Turn the car and every beam turns with it; the
+whole observation row changes. That changing list is the lidar part of what the
+policy sees.
 
 ## TheHandoff
 
-Follow one row. Each yellow point is a physics update, using the state produced
-by the one before it. The rows can make progress independently. Within a row,
-the six updates happen in order.
+Follow one row: each yellow point is a physics update using the state from the
+one before, so the six updates run in order. The rows are different cars and
+advance independently. After physics has written the new poses, lidar can
+start, and each car supplies 108 independent beam items. Car two, beam six
+writes observation entry eight, because the first two entries hold steering
+and speed.
 
-After physics has written the new poses, lidar can start. Each car now supplies
-one hundred and eight independent ray items. We're drawing ten columns so the
-indices remain readable.
+Now the output arrays: observations, rewards, and done flags, one row per car.
+Physics writes steering, speed, reward, and done; the row that just crashed has
+already respawned, so its steering and speed are zero. Then lidar fills the
+range entries from those updated poses. Last, one device counter ticks once per
+step. On a later respawn the physics kernel mixes that tick with the seed and
+car index to draw a new waypoint, friction scale, and wheelbase scale.
 
-Pick row two and beam six. That work item writes its range to observation
-entry eight, because steering and speed occupy the first two entries.
+Torch is the learning code's tensor library. When Warp and Torch share a CUDA
+device, Torch's output tensors are views of these same buffers, and the kernels
+launch on Torch's stream so physics finishes before lidar reads its results.
+With Torch on another device the outputs are copied once per step.
 
-Now look at the output arrays. This is a small illustrative
-view of the buffers: observations, rewards, and done flags. Physics writes
-steering and speed, along with reward and done. The red terminal row has already
-respawned, so its steering and speed are zero. Then lidar fills the range entries
-using those updated poses.
-
-RNG means random number generator. The tick is one integer counter stored in
-the simulation device's memory, separate from these output arrays. After lidar,
-bump kernel adds one to tick zero, once per environment step. On a later
-respawn, the physics kernel combines that tick with the seed and car index to
-choose a new waypoint, friction scale and wheelbase scale. The displayed
-forty-two and forty-three are illustrative counter values.
-
-When Warp and Torch use the same CUDA device, Torch's output tensors view these
-same buffers. Both arrows point to the same displayed data. The launches use
-Torch's current stream, so physics finishes before lidar reads its results.
-
-The policy receives observations, rewards, and done flags from that shared
-output storage.
-
-Return to the car from the opening. Move it using the available grip. Score
-its progress. Measure its new view. Return the results to Torch. The program
-stays the same, while each car supplies its own state, action, and track.
-That independence gives Warp thousands of useful tasks to do in parallel.
+Return to the car from the opening. Move it within the available grip, score
+its progress, measure its new view, and hand the results to Torch. The program
+is the same for every car; each supplies its own state, action, and track. That
+independence is what gives Warp thousands of useful tasks to run in parallel.
