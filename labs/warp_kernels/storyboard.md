@@ -141,6 +141,14 @@ Paths are relative to the sibling `warporacer` repository.
 | `warporacer/sim.py:428` | action copy and returned outputs |
 | `warporacer/track.py:19` | precomputed track maps |
 
+## Slideshow cut
+
+`render.py --slides` renders with `WARP_SLIDES=1`, which caps every pause at
+0.35 s because the presenter sets the pace. Each caption starts a new slide, so
+a click plays the caption's crossfade and the motion that belongs to it, then
+holds on the finished picture. Headings and the guide strip act as slide
+titles. The deck is one clip per slide plus `player.html`.
+
 ## Render review
 
 `render.py --review` tiles one frame per caption into contact sheets under

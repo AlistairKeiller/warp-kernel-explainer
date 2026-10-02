@@ -10,3 +10,4 @@ latex_cache/
 videos/**/*.beats.json
 videos/review/
 videos/preview/
+videos/slides/

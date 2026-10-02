@@ -44,13 +44,28 @@ under `videos/review/`. Pass `--manimgl /path/to/manimgl` to use another
 installation. For interactive work, omit `-w` from the single-chapter command;
 `-p` adds presenter pauses.
 
+## Present it as a slideshow
+
+```bash
+uv run python labs/warp_kernels/render.py --slides
+open videos/slides/index.html
+```
+
+This renders a cut with the reading pauses collapsed, splits it at every
+caption into one clip per slide, and writes a self-contained player. Click,
+<kbd>→</kbd>, or <kbd>Space</kbd> plays the next slide; a click during an
+animation finishes it first. <kbd>←</kbd> steps back to the previous slide's
+finished frame, and <kbd>f</kbd> toggles fullscreen. The deck works straight
+from the file system; nothing needs serving.
+
 ## Project layout
 
 ```text
 labs/
 └── warp_kernels/
     ├── main.py         # Scenes: stagecraft, geometry, captions, reading time
-    ├── render.py       # Render, assemble, add chapters, extract review frames
+    ├── render.py       # Render, assemble, add chapters, cut slides, review frames
+    ├── player.html     # Click-through player for the slide deck
     ├── narration.md    # Companion explanation in prose, by scene
     └── storyboard.md   # Visual intent, abstractions, and source-code map
 ```

@@ -2,10 +2,12 @@
 
 uv run python labs/warp_kernels/render.py --preview --review   # 720p, into videos/preview/
 uv run python labs/warp_kernels/render.py                      # 1080p, into videos/
+uv run python labs/warp_kernels/render.py --slides             # click-through deck, into videos/slides/
 """
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -41,13 +43,14 @@ def timestamp(seconds):
     return f"{minutes:02}:{seconds:02}"
 
 
-def render(directory, preview, manimgl):
+def render(directory, preview, manimgl, slideshow=False):
     command = [manimgl] if manimgl else ["uv", "run", "manimgl"]
-    run(command + [
+    env = os.environ | ({"WARP_SLIDES": "1"} if slideshow else {})
+    subprocess.run(command + [
         SOURCE, *(scene for scene, _ in CHAPTERS), "-w", "-q",
         "-r", "1280x720" if preview else "1920x1080", "--fps", "15" if preview else "30",
-        "--video_dir", directory,
-    ])
+        "--video_dir", str(directory),
+    ], cwd=ROOT, check=True, env=env)
 
 
 def assemble(directory):
@@ -103,18 +106,41 @@ def review(directory, per_sheet=12):
     print(f"Review sheets: {target}", flush=True)
 
 
+def cut_slides(directory):
+    """Split every chapter at its slide boundaries into one clip per slide."""
+    clips = directory / "clips"
+    clips.mkdir(exist_ok=True)
+    manifest = []
+    for scene, title in CHAPTERS:
+        data = json.loads((directory / f"{scene}.beats.json").read_text())
+        bounds = data["slides"] + [data["duration"]]
+        for k, (start, end) in enumerate(zip(bounds, bounds[1:])):
+            clip = clips / f"{scene}-{k:02}.mp4"
+            run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", start, "-to", end,
+                 "-i", directory / f"{scene}.mp4", "-an", "-c:v", "libx264", "-preset", "veryfast",
+                 "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", clip])
+            manifest.append({"src": f"clips/{clip.name}", "chapter": title})
+    player = (Path(__file__).parent / "player.html").read_text()
+    (directory / "index.html").write_text(player.replace("__SLIDES__", json.dumps(manifest)))
+    print(f"Deck ready: {directory / 'index.html'} ({len(manifest)} slides)", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preview", action="store_true", help="720p at 15 fps, into videos/preview/")
+    parser.add_argument("--slides", action="store_true", help="Build the click-through deck in videos/slides/")
     parser.add_argument("--assemble-only", action="store_true", help="Reuse the existing chapter renders")
     parser.add_argument("--review", action="store_true", help="Also extract a frame per caption beat")
     parser.add_argument("--manimgl", help="Path to a manimgl executable (default: uv run manimgl)")
     args = parser.parse_args()
-    directory = ROOT / "videos" / ("preview" if args.preview else "")
+    directory = ROOT / "videos" / ("slides" if args.slides else "preview" if args.preview else "")
     directory.mkdir(parents=True, exist_ok=True)
     if not args.assemble_only:
-        render(directory, args.preview, args.manimgl)
-    assemble(directory)
+        render(directory, args.preview, args.manimgl, slideshow=args.slides)
+    if args.slides:
+        cut_slides(directory)
+    else:
+        assemble(directory)
     if args.review:
         review(directory)
 

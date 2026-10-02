@@ -1,13 +1,15 @@
 """One simulation step of warporacer, told as five silent ManimGL chapters.
 
-Render one chapter:   manimgl labs/warp_kernels/main.py VehicleStep -w
-Render the whole film: python labs/warp_kernels/render.py
+Render one chapter:    manimgl labs/warp_kernels/main.py VehicleStep -w
+Render the whole film:  python labs/warp_kernels/render.py
+Build the click-through deck:  python labs/warp_kernels/render.py --slides
 
 Every drawing is original. storyboard.md records what each picture simplifies
 and where the matching code lives in warporacer/sim.py.
 """
 from contextlib import contextmanager
 import json
+import os
 from pathlib import Path
 import textwrap
 
@@ -32,8 +34,12 @@ CAPTION_Y = -3.47
 RIGHT_COLUMN = 3.2 * RIGHT
 
 # A silent film needs time to read each caption before the picture changes.
+# In slideshow mode the presenter sets the pace, so pauses collapse and every
+# caption starts a new slide.
 READ_LEAD = .7
 WORDS_PER_SECOND = 3.1
+SLIDESHOW = os.environ.get("WARP_SLIDES") == "1"
+SLIDE_PAUSE = .35
 
 # Simulator constants mirrored from warporacer/sim.py.
 WHEELBASE = .3302
@@ -136,6 +142,7 @@ class FilmScene(Scene):
         self.pending_wipe = False
         self.beats = []
         self.captions = []
+        self.slides = [0.]
         self.phases = VGroup(
             words(name, 20, YELLOW if i == self.phase else WALL)
             for i, name in enumerate(PHASES)
@@ -157,6 +164,11 @@ class FilmScene(Scene):
         """Everything on screen except the guide, the heading, and `keep`."""
         persistent = {self.camera.frame, self.guide, self.heading_mob, *keep}
         return [mob for mob in self.mobjects if mob not in persistent]
+
+    def wait(self, duration=None, **kwargs):
+        if SLIDESHOW and duration is not None:
+            duration = min(duration, SLIDE_PAUSE)
+        super().wait(duration, **kwargs)
 
     def let_read(self):
         """Hold the current caption until it has had time to be read."""
@@ -185,6 +197,7 @@ class FilmScene(Scene):
     def caption(self, text, color=MUTED):
         mob = words(textwrap.fill(text, 78), 28, color).set_max_width(12.6).move_to(CAPTION_Y * UP)
         self.let_read()
+        self.slides.append(round(self.time, 3))
         if self.caption_mob in self.mobjects:
             self.play(LaggedStart(FadeOut(self.caption_mob), FadeIn(mob), lag_ratio=.6), run_time=.8)
         else:
@@ -217,7 +230,7 @@ class FilmScene(Scene):
             path = Path(self.file_writer.get_movie_file_path()).with_suffix(".beats.json")
             path.write_text(json.dumps({
                 "scene": str(self), "duration": round(self.time, 3),
-                "beats": self.beats, "captions": self.captions,
+                "beats": self.beats, "captions": self.captions, "slides": self.slides,
             }, indent=2) + "\n")
         super().tear_down()
 
@@ -293,7 +306,7 @@ class Opening(FilmScene):
             words("state + action → next state", 27),
         ).arrange(DOWN, buff=.55).move_to(RIGHT_COLUMN + .5 * UP)
         self.play(FadeIn(kernel[0]), Write(kernel[1]), FadeIn(kernel[2]), run_time=2)
-        self.caption("Warp hands these work items to the hardware. A work item is a task, not a GPU core.")
+        self.caption("Warp spreads these work items over the hardware. A work item is a task, not a GPU core.")
         road, racer = chosen
         self.add(racer.copy().fade(.75), racer)
         self.play(UpdateFromAlphaFunc(racer, lambda m, a: m.pose(*track_pose(1.01 + .45 * a, road))), run_time=2)
@@ -365,7 +378,7 @@ class VehicleStep(FilmScene):
         ).arrange(DOWN, buff=.6).move_to(RIGHT_COLUMN + .3 * UP)
         self.play(ShowCreation(angle), Write(psi), TransformFromCopy(horizontal, equations[0]), run_time=1.5)
         self.play(TransformFromCopy(vertical, equations[1]), run_time=1.5)
-        self.caption("v is speed and ψ is heading. A dot over x or y means change per second.")
+        self.caption("v is speed, ψ is heading, and a dot means change per second.")
         self.wait(2.5)
         with self.live(update):
             self.caption("Turn the arrow: both parts change together.")
@@ -382,7 +395,7 @@ class VehicleStep(FilmScene):
         approximation = formula(R"\text{displacement}\approx\text{velocity}\times\text{time}", 32, BLUE)
         approximation.set_max_width(6).next_to(equations, DOWN, buff=.9)
         self.play(Write(approximation))
-        self.caption("Over a short time the car moves about velocity × time. That works while the direction barely changes.")
+        self.caption("Over a short time the car moves about velocity × time, as long as the direction barely changes.")
         self.wait(3)
         return approximation
 
@@ -521,7 +534,7 @@ class VehicleStep(FilmScene):
         self.caption("A new picture. Up and down is turning; left and right is braking and throttle.")
         self.wait(2)
         limit = formula(R"|a|\leq\mu g", 42, GREEN).move_to(RIGHT_COLUMN + 1.7 * UP)
-        self.caption("Friction limits how hard the tires can push: at most μg, where μ is grip and g is gravity.")
+        self.caption("Friction caps the tires' push at μg: μ is grip, g is gravity.")
         self.play(Write(limit))
         circle = Circle(radius=unit).move_to(origin).set_stroke(GREEN, 2.5).set_fill(GREEN, .035)
         radius_line = Line(origin, origin + unit * RIGHT).set_stroke(GREEN, 2)
@@ -582,13 +595,13 @@ class VehicleStep(FilmScene):
             self.wait(1.5)
             outside = words("More throttle than the tires can supply.", 25, RED).move_to(note_position)
             self.play(FadeIn(requested), FadeIn(request_dot), FadeIn(legend), FadeOut(fits))
-            self.caption("Red is the request. Ask for more throttle than the grip allows, and the simulator clips it.")
+            self.caption("Red is the request. Too much throttle for the grip, and the simulator clips it.")
             self.play(request_x.animate.set_value(1.2), FadeIn(removed), run_time=3)
             self.play(Write(outside))
             self.wait(2)
             remaining_eq = formula(R"|a_{\rm long}|\leq\sqrt{(\mu g)^2-a_{\rm lateral}^2}", 33, BLUE).move_to(readout_position)
             self.play(FadeIn(allowance), FadeIn(guide), Write(remaining_eq), run_time=2)
-            self.caption("The blue slice is the throttle or braking left after this turn. A harder turn leaves less.")
+            self.caption("The blue slice is the throttle or braking left for this turn. A harder turn leaves less.")
             self.play(request_y.animate.set_value(.94), run_time=4)
             self.wait(1)
             self.play(request_y.animate.set_value(.2), run_time=3)
@@ -689,10 +702,10 @@ class VehicleStep(FilmScene):
             ], colors)
         ).arrange(DOWN, aligned_edge=LEFT, buff=.4).move_to(RIGHT_COLUMN + .45 * UP)
         explanations = [
-            "Start from the car's current position, heading, and speed. k₁ is their rate of change.",
-            "Use that first sample to predict the halfway state, and sample the motion there.",
-            "Use the new sample to improve the halfway prediction, and sample again.",
-            "Use the third sample to predict the end of the interval. Take one last sample.",
+            "Start from the current state. k₁ is its rate of change.",
+            "Predict the halfway state with k₁, and sample the motion there.",
+            "Improve the halfway prediction with k₂, and sample again.",
+            "Predict the end of the interval with k₃. Take one last sample.",
         ]
         mark_x = [-5.1, -2.7, -2.7, -.3]
         arrows, dots, labels, cars, marks, predictions = (VGroup() for _ in range(6))
@@ -803,7 +816,7 @@ class RewardAndRespawn(FilmScene):
         walls, centerline, waypoints = self.get_corridor(top)
         racer = Car([-3, .55, 0])
         self.play(ShowCreation(walls), ShowCreation(centerline), FadeIn(waypoints), FadeIn(racer))
-        self.caption("Reward is a score: progress along the track is good, getting close to a wall is bad.")
+        self.caption("Reward is a score: progress along the track is good, hugging a wall is bad.")
         self.wait(3)
         ring = Circle(radius=top - .55).move_to(racer).set_stroke(YELLOW, 2)
         distance = Line(racer.get_center(), [-3, top, 0]).set_stroke(YELLOW, 4)
@@ -811,7 +824,7 @@ class RewardAndRespawn(FilmScene):
         wall_answer = words("A precomputed wall-distance map", 24, YELLOW).move_to([2.7, 2.55, 0])
         self.play(ShowCreation(ring), ShowCreation(distance), Write(wall_question))
         self.play(FadeIn(wall_answer))
-        self.caption("That map is built once when the track loads. Each pixel stores its distance to the nearest wall.")
+        self.caption("Built once when the track loads: every pixel stores its distance to the nearest wall.")
         self.wait(3)
         nearest = Line(racer.get_center(), [-3, 0, 0]).set_stroke(GREEN, 4)
         track_question = words("Where am I along the track?", 29, BLUE).move_to(2.55 * UP)
@@ -988,7 +1001,7 @@ class WarpLidar(FilmScene):
                 nearest = Line(p, [p[0], -2, 0]).set_stroke(YELLOW, 3)
                 label = formula("d(p)", 30, YELLOW).next_to(jump, DOWN, buff=.2)
                 self.play(ShowCreation(nearest), Write(label))
-                self.caption("The nearest wall is beside the ray, but no wall lies inside this circle. So the ray can safely jump one radius.")
+                self.caption("No wall lies inside this circle, even though the nearest one is beside the ray. Jump one radius.")
                 self.wait(3)
                 self.play(FadeOut(label), FadeOut(nearest), Write(rule), FadeIn(glossary))
             elif i == 1:
@@ -1009,7 +1022,7 @@ class WarpLidar(FilmScene):
         brace = Brace(range_line, normal, buff=.22)
         result = formula(R"r_j=\sum_n d(p_n)", 34, BLUE).rotate(ray_angle).move_to(brace.get_tip() + .4 * normal)
         self.play(ShowCreation(range_line), GrowFromCenter(brace), Write(result))
-        self.caption("Add up the jumps: that sum is the ray's range. The kernel caps it at 20 meters.")
+        self.caption("Add up the jumps: that is the ray's range, capped at 20 meters.")
         self.wait(3)
         self.play(result.animate.rotate(-ray_angle), run_time=.8)
         return result
@@ -1053,7 +1066,7 @@ class WarpLidar(FilmScene):
             words("i chooses the car\nj chooses the beam", 28, MUTED),
         ).arrange(DOWN, buff=.4).move_to(RIGHT_COLUMN + .9 * UP)
         self.play(Write(index[0]), FadeIn(index[1]))
-        self.caption("A lidar work item is one car and one beam. Each ray marches on its own, so the rays are independent.")
+        self.caption("A lidar work item is one car and one beam. Each ray marches on its own.")
         self.play(beams[10].animate.set_stroke(YELLOW, 4))
         self.wait(2.5)
 
@@ -1109,7 +1122,7 @@ class TheHandoff(FilmScene):
         physics_label = words("six updates per car", 28, YELLOW).move_to([-3.7, 2.55, 0])
         ray_label = words("108 rays per car", 28, BLUE).move_to([3.1, 2.55, 0])
         self.play(FadeIn(cars), ShowCreation(links), FadeIn(rows), FadeIn(row_labels), FadeIn(pulses), Write(physics_label))
-        self.caption("Down the page: different cars advance independently. Across a row: the six updates run in order.")
+        self.caption("Down the page, cars advance independently. Across a row, the six updates run in order.")
         for j in range(SUBSTEPS):
             self.play(*(pulse.animate.move_to(row[j]) for pulse, row in zip(pulses, rows)),
                       *(row[j].animate.set_color(YELLOW) for row in rows), run_time=.75)
@@ -1137,7 +1150,7 @@ class TheHandoff(FilmScene):
         self.play(FlashAround(selected, color=YELLOW))
         destination = formula(R"\texttt{obs}[2,\,8]=r_6", 35, YELLOW).move_to([2.9, -2.75, 0])
         self.play(TransformFromCopy(selected, destination), run_time=1.5)
-        self.caption("Car 2, beam 6 writes observation entry 8, because the first two entries hold steering and speed.")
+        self.caption("Car 2, beam 6 writes entry 8: the first two entries hold steering and speed.")
         self.wait(3)
         return destination
 
@@ -1209,19 +1222,19 @@ class TheHandoff(FilmScene):
         tick_arrow = Arrow(stages[2].get_top(), tick.get_bottom(), buff=.15, fill_color=MUTED)
         bump = words("bump_kernel: tick[0] += 1", 24, YELLOW).move_to(2.8 * DOWN)
         self.play(FlashAround(stages[2], color=WHITE), Write(tick), FadeIn(tick_note), GrowArrow(tick_arrow), Write(bump))
-        self.caption("Last, one device counter ticks. Respawns mix it with the seed and car index for fresh randomness.")
+        self.caption("Last, one device counter ticks. Respawns mix it with the seed and car index.")
         self.play(TransformMatchingTex(tick, next_tick))
         self.wait(2.5)
         self.play(FadeOut(VGroup(next_tick, tick_note, tick_arrow, bump)))
         torch = VGroup(words("Torch", 32, GREEN), words("views", 24, MUTED)).arrange(DOWN, buff=.15).move_to([5.05, .6, 0])
         torch_arrow = Arrow([4.35, .45, 0], [3.4, .45, 0], buff=0, fill_color=GREEN)
-        self.caption("Torch is the learning code's tensor library. On the same CUDA device, it views these very buffers.")
+        self.caption("Torch, the learning side, views these same buffers when it shares the CUDA device.")
         self.play(Write(torch[0]), FadeIn(torch[1]), GrowArrow(torch_arrow), run_time=1.5)
         self.play(Indicate(frame, color=GREEN), run_time=1.5)
         self.wait(1.5)
         shared = words("Two views of the same output storage.", 30, GREEN).move_to(2.15 * DOWN)
         self.play(FadeTransform(stages, shared))
-        self.caption("No copies when Warp and Torch share a CUDA device. Elsewhere the outputs are copied once per step.")
+        self.caption("No copies on a shared CUDA device. Elsewhere the outputs are copied once per step.")
         self.wait(3)
         return shared
 
